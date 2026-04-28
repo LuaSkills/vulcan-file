@@ -1,6 +1,6 @@
 """
-Validate the demo LuaSkill repository against the strict package rules.
-校验演示 LuaSkill 仓库是否满足严格包结构规则。
+Validate the vulcan-file LuaSkill repository against strict package rules.
+校验 vulcan-file LuaSkill 仓库是否满足严格包结构规则。
 """
 
 from __future__ import annotations
@@ -115,16 +115,12 @@ def validate_manifest(root: Path) -> None:
 
 
 """
-Validate the dependency manifest used by the demo package.
-校验演示包使用的依赖清单。
+Validate the dependency manifest used by the vulcan-file package.
+校验 vulcan-file 包使用的依赖清单。
 """
 def validate_dependencies(root: Path) -> None:
     dependency_manifest = load_yaml(root / "dependencies.yaml")
-    tools = dependency_manifest.get("tool_dependencies", [])
-    require(isinstance(tools, list), "tool_dependencies must be a YAML list")
-    require(any(item.get("name") == "rg" for item in tools if isinstance(item, dict)), "The demo must declare one rg dependency")
-
-    for group_name in ("lua_dependencies", "ffi_dependencies"):
+    for group_name in ("tool_dependencies", "lua_dependencies", "ffi_dependencies"):
         group = dependency_manifest.get(group_name, [])
         require(isinstance(group, list), f"{group_name} must be a YAML list")
 

@@ -1,8 +1,5 @@
 # Third-Party Notices
 
-The `LuaSkills/demo-skill` repository declares one optional tool dependency:
+`vulcan-file` does not declare external tool, Lua, or FFI dependencies.
 
-- `rg` from the `BurntSushi/ripgrep` GitHub release distribution
-
-The dependency is not bundled into the repository itself.
-It is downloaded only by the LuaSkills dependency installer when the host allows network installation.
+The Lua runtime code in this repository is distributed under the repository license.

@@ -1,27 +1,81 @@
-# demo-skill
+# vulcan-file
 
-A complete demo LuaSkill repository at `LuaSkills/demo-skill` for testing package installation, GitHub release packaging, version updates, uninstall behavior, and one no-op `rg` dependency.
+AI-native file operations LuaSkill for Vulcan.
 
-## What this repository demonstrates
+Chinese version: [README.zh-CN.md](README.zh-CN.md)
 
-- the strict `skill.yaml` package layout
-- a required semantic `version` field in `skill.yaml`
-- a `dependencies.yaml` file with one skill-local `rg` dependency
-- multiple runtime entries under `runtime/`
-- help topics under `help/`
-- one overflow template under `overflow_templates/`
-- one resource file under `resources/`
-- GitHub Actions workflows for validation and release packaging
-- a tag-driven release workflow that only builds packages after a release tag is pushed
+`vulcan-file` gives AI agents a small, predictable file toolkit for everyday repository work. It focuses on the operations agents repeatedly need but often implement with ad-hoc shell snippets: compact file discovery, exact line-numbered reads, and preview-first text edits.
 
-## Skill package layout
+## When To Use
+
+Use `vulcan-file` when an agent needs to work with raw files directly:
+
+- Find candidate files cheaply before reading them.
+- Read exact source text after a file and line area are known.
+- Read multiple non-adjacent snippets in one call.
+- Make small text edits after inspecting the target lines.
+- Avoid shell-specific loops for listing, line numbering, range extraction, and simple edits.
+
+Prefer Vulcan CodeKit instead when the task needs AST structure, function/class ownership, regex-to-structure mapping, or whole-function patching.
+
+## Tools
+
+### `vulcan-file-list`
+
+Use this before reading when the target file is not known yet.
+
+It returns a compact directory-grouped file map, supports filename globs, and respects `.gitignore`, `.ignore`, and built-in high-noise directory ignores by default.
+
+Typical use cases:
+
+- Scan a project tree with low token cost.
+- Filter candidates by extension, such as `*.rs`, `*.lua`, or `Cargo.*`.
+- Avoid scanning generated directories such as `target`, `node_modules`, `output`, `dist`, and `build`.
+
+### `vulcan-file-read`
+
+Use this after the agent already knows the target file and approximate line area.
+
+The main argument is `lines_rule`, a compact `start,count` format:
 
 ```text
-demo-skill/
+5,10
+25,30
+```
+
+This reads 10 lines starting at line 5, then 30 lines starting at line 25. Each segment is rendered with stable line numbers, and requests that run past EOF are clipped clearly.
+
+### `vulcan-file-edit`
+
+Use this for small text edits after the target context has been read.
+
+The tool previews by default and writes only when `apply=true` is passed. Supported modes:
+
+- `overwrite`
+- `append`
+- `replace_range`
+- `insert_before`
+- `insert_after`
+
+The result includes the original span, edited span, preview diff, and clear parameter-error feedback when the call shape is wrong.
+
+## Skill Package Layout
+
+```text
+vulcan-file/
 ├─ skill.yaml
 ├─ dependencies.yaml
+├─ README.md
+├─ README.zh-CN.md
 ├─ runtime/
+│  ├─ vulcan-file-read.lua
+│  ├─ vulcan-file-list.lua
+│  └─ vulcan-file-edit.lua
 ├─ help/
+│  ├─ help.md
+│  ├─ read.md
+│  ├─ list.md
+│  └─ edit.md
 ├─ overflow_templates/
 ├─ resources/
 ├─ licenses/
@@ -29,28 +83,7 @@ demo-skill/
 └─ .github/workflows/
 ```
 
-## Demo tools
-
-- `demo-status`
-  - returns stable runtime diagnostics for installation and lifecycle testing
-- `rg-check`
-  - reports the expected local `rg` dependency path and runs `rg --version` when the file exists
-- `overflow-demo`
-  - returns paged output and a skill-local overflow template hint
-
-## Demo dependency
-
-The repository declares one skill-local `rg` dependency in `dependencies.yaml`.
-
-The dependency is intentionally non-essential:
-
-- it is useful for testing install and uninstall behavior
-- it is safe to skip when network downloads are disabled
-- the `rg-check` tool can still return a diagnostic report when `rg` is missing
-
 ## Validation
-
-This repository includes one validation workflow and one release workflow.
 
 Local validation:
 
@@ -59,42 +92,29 @@ python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
 ```
 
-The default packaging script generates two artifacts under `dist/`:
+The packaging script generates release artifacts under `dist/`:
 
-- `<skill-id>-v<version>-skill.zip`
-- `<skill-id>-v<version>-checksums.txt`
+- `vulcan-file-v<version>-skill.zip`
+- `vulcan-file-v<version>-checksums.txt`
 
-For URL-based install and update tests, you can optionally generate one source metadata file:
+Optional source metadata:
 
 ```powershell
 python .\scripts\package_skill.py --emit-source-yaml
 ```
 
-That optional command adds:
+The generated metadata points to the matching `LuaSkills/vulcan-file` GitHub release assets unless `--base-url` is provided.
 
-- `<skill-id>-v<version>-source.yaml`
+## Release Flow
 
-If you do not pass `--base-url`, the generated `source.yaml` points to the matching `LuaSkills/demo-skill` GitHub release asset names for the current manifest version.
-
-GitHub validation:
-
-- pushes to `main` do not trigger GitHub Actions automatically
-- pull requests only run structure validation
-- no release package is published from branch pushes
-
-## Tag-based release flow
-
-This repository uses a tag-driven release flow.
-
-Only a pushed tag that matches `v*` triggers package build and GitHub release publication.
-The tag must match `skill.yaml.version`.
+Releases are tag-driven. A pushed tag matching `v*` triggers the release workflow, and the tag must match `skill.yaml.version`.
 
 Recommended local release steps:
 
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.3
+.\scripts\tag_release.ps1 0.1.0
 ```
 
 Or on Unix-like shells:
@@ -102,67 +122,12 @@ Or on Unix-like shells:
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.3
-```
-
-The helper scripts normalize the version into a `vX.Y.Z` tag and push it to `origin`.
-The packaging script treats `skill.yaml.version` as the release version source of truth and rejects mismatched tag or CLI versions.
-GitHub release publication only uploads the zip package and checksum file.
-
-If you want to generate source metadata with an explicit release asset URL, pass a base URL together with the source-yaml flag:
-
-```powershell
-python .\scripts\package_skill.py --emit-source-yaml --base-url https://github.com/LuaSkills/demo-skill/releases/download/v0.1.3
-```
-
-## Fork and publish flow
-
-Forking this repository is supported, but a forked repository name change alone does not rename the LuaSkill itself.
-
-If you want to publish your own skill based on this demo, use this recommended flow:
-
-1. Fork the repository.
-2. Optionally rename the GitHub repository.
-3. Rename the local repository root directory to the final skill id you want to publish.
-4. Update `skill.yaml`:
-   - set `name` to your display name
-   - set `version` to your first release version
-5. Update runtime, help, README, and resource files if they still mention `demo-skill` or `LuaSkills/demo-skill`.
-6. Run local validation:
-
-```powershell
-python .\scripts\validate_skill.py
-python .\scripts\package_skill.py
-```
-
-7. Tag and push your release:
-
-```powershell
-.\scripts\tag_release.ps1 0.1.3
-```
-
-Important notes:
-
-- The LuaSkill runtime identity comes from the packaged top-level directory name, not from the GitHub repository name alone.
-- If you only rename the GitHub repository but keep the packaged skill directory as `demo-skill`, the installed `skill_id` still remains `demo-skill`.
-- Always make sure the package root directory, release asset names, and documentation all match your final skill id before publishing.
-
-## Release packaging
-
-After the tag is pushed, the release workflow produces:
-
-- `<skill-id>-v<version>-skill.zip`
-- `<skill-id>-v<version>-checksums.txt`
-
-The zip file always expands to one top-level directory named exactly:
-
-```text
-demo-skill/
+./scripts/tag_release.sh 0.1.0
 ```
 
 ## Notes
 
-- Runtime output is intentionally English-only.
-- Code comments inside source files follow the rule: English line first, Chinese line second.
-- The repository root itself is the skill root, and the skill id is the directory name.
-- The optional `source.yaml` is reserved for URL-based install flows, self-hosted package endpoints, and future skillhub-compatible metadata responses rather than GitHub release publication.
+- The repository root is the skill root.
+- The installed skill id is derived from the package root directory name: `vulcan-file`.
+- Runtime code has no external tool dependency.
+- Runtime output is designed for AI agents: compact, line-stable, and explicit about parameter mistakes.

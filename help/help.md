@@ -1,20 +1,16 @@
-# LuaSkills Demo Skill
+# Vulcan File
 
-This `LuaSkills/demo-skill` repository is a complete demo package for LuaSkills.
+当你需要直接处理原文文件，而不是理解代码结构或搜索文本时，使用 `vulcan-file`。
 
-It is designed to validate:
+优先这样选择：
 
-- package installation from GitHub release assets
-- package updates through new release versions
-- skill uninstall behavior
-- skill-local dependency installation
-- host overflow handling with a skill-local template hint
+- 已经知道文件路径和大致行号：使用 `vulcan-file-read`。
+- 还不知道目标文件在哪：先使用 `vulcan-file-list` 获取低 token 文件名地图。
+- 需要做小范围文本改动：使用 `vulcan-file-edit`，先预览，再 `apply=true`。
 
-Available workflows:
+不要这样选择：
 
-- `demo-status`
-  - inspect the active skill instance and request context
-- `rg-dependency`
-  - inspect the optional local `rg` dependency path
-- `overflow-demo`
-  - verify paged host output and skill-local overflow templates
+- 需要搜索文本或定位锚点时，不要用 `vulcan-file-read` 猜行号，先用 `vulcan-codekit-rg`。
+- 需要理解函数、类或源码结构时，优先使用 `vulcan-codekit`。
+- 需要替换完整函数或方法时，使用 `vulcan-codekit-patch`。
+- 需要大规模重构时，不要用文本级编辑硬改，应先读取结构上下文。

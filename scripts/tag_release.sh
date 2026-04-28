@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Create and push an annotated Git tag for the demo LuaSkill release.
-# 创建并推送用于演示 LuaSkill 发布的带注释 Git 标签。
+# Create and push an annotated Git tag for the vulcan-file LuaSkill release.
+# 创建并推送用于 vulcan-file LuaSkill 发布的带注释 Git 标签。
 
 set -euo pipefail
 

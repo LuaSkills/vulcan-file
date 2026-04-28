@@ -1,63 +1,96 @@
-name: LuaSkills Demo Skill
-version: 0.1.3
-enable: true
-debug: false
-lancedb:
-  enable: false
-  log_level: warning
-  slow_log_enabled: false
-  slow_log_threshold_ms: 800
-sqlite:
-  enable: false
-  log_level: warning
-  slow_log_enabled: false
-  slow_log_threshold_ms: 800
+name: vulcan-file
+version: 0.1.0
+debug: true
 help:
   main:
-    description: Main help node for the LuaSkills/demo-skill repository used in update smoke tests.
+    description: Help agents decide when to use vulcan-file instead of CodeKit, rg, or shell snippets.
     file: help/help.md
   topics:
-    - name: demo-status
-      description: Explain the runtime diagnostics tool.
-      file: help/demo-status.md
-    - name: rg-dependency
-      description: Explain the no-op rg dependency and how it is resolved.
-      file: help/rg-dependency.md
-    - name: overflow-demo
-      description: Explain the paged output demo and local overflow template.
-      file: help/overflow-demo.md
+    - name: read
+      description: Read one or more raw text snippets when the file path and approximate line area are known.
+      file: help/read.md
+    - name: list
+      description: Find candidate files cheaply before reading them.
+      file: help/list.md
+    - name: edit
+      description: Make small preview-first text edits after target lines have been inspected.
+      file: help/edit.md
 entries:
-  - name: demo-status
-    description: Return stable runtime diagnostics for install and lifecycle testing.
-    lua_entry: runtime/demo_status.lua
-    lua_module: demo_status
-    help: demo-status
+  - name: read
+    description: "[AI FILE READ] Use when you already know the target file and line area and need exact source text. Pass lines_rule as start,count; use one line per segment for multiple ranges. Do not use this to search; use codekit-rg first."
+    lua_entry: runtime/vulcan-file-read.lua
+    lua_module: vulcan_file_read
+    help: read
     parameters:
-      - name: name
+      - name: file
         type: string
-        description: Optional caller label included in the response.
+        description: "Use the file path you already selected. Passing a directory is only for a quick direct-child Name listing; use vulcan-file-list for recursive discovery."
+        required: true
+      - name: lines_rule
+        type: string
+        description: "Use when you need specific lines. Format: start,count. For multiple snippets, put one rule per line, for example: 5,10 newline 25,30. Omit only when the beginning of the file is enough."
         required: false
-      - name: include_context
+      - name: numbered
         type: boolean
-        description: Include vulcan.context.request when true.
+        description: "Keep true when you will cite or edit by line number. Set false only when raw text without line prefixes is more useful."
         required: false
-  - name: rg-check
-    description: Report the expected local rg dependency path and run rg --version when it exists.
-    lua_entry: runtime/rg_check.lua
-    lua_module: rg_check
-    help: rg-dependency
+  - name: list
+    description: "[AI FILE LIST] Use before reading when you need to find candidate files cheaply. Prefer this over shell directory loops for a compact ignored-aware file map. Use codekit tools instead when you need AST structure."
+    lua_entry: runtime/vulcan-file-list.lua
+    lua_module: vulcan_file_list
+    help: list
     parameters:
-      - name: run_version
+      - name: path
+        type: string
+        description: "Use the narrowest directory that may contain the target files. Omit only for a project-level map."
+        required: false
+      - name: pattern
+        type: string
+        description: "Use a file-name glob when the extension or file name shape is known, such as *.rs, *.lua, or Cargo.*. Defaults to all file names."
+        required: false
+      - name: recursive
         type: boolean
-        description: Run rg --version when the local binary exists.
+        description: "Keep true when searching a project tree. Set false only when the target must be a direct child of path."
         required: false
-  - name: overflow-demo
-    description: Emit paged markdown output and one skill-local overflow template hint.
-    lua_entry: runtime/overflow_demo.lua
-    lua_module: overflow_demo
-    help: overflow-demo
+      - name: noignore
+        type: boolean
+        description: "Use only when ignored/generated directories are intentionally needed. Defaults to respecting .gitignore, .ignore, and high-noise built-ins."
+        required: false
+      - name: limit
+        type: number
+        description: "Use to cap broad scans. Raise it only when the result is truncated and more candidate file names are still needed."
+        required: false
+  - name: edit
+    description: "[AI FILE EDIT] Use for small text edits after you have read the target lines. It previews by default; pass apply=true only after the preview matches the intended change."
+    lua_entry: runtime/vulcan-file-edit.lua
+    lua_module: vulcan_file_edit
+    help: edit
     parameters:
-      - name: sections
-        type: integer
-        description: Number of repeated sections in the generated markdown.
+      - name: file
+        type: string
+        description: "Use the exact file path to edit."
+        required: true
+      - name: mode
+        type: string
+        description: "Choose overwrite for full file replacement, append for file-end additions, replace_range for known line ranges, or insert_before/insert_after for anchored inserts."
+        required: true
+      - name: content
+        type: string
+        description: "Use the complete replacement or insertion text for the selected mode."
+        required: true
+      - name: start_line
+        type: number
+        description: "Use only with replace_range; this is the first 1-based line to replace."
+        required: false
+      - name: end_line
+        type: number
+        description: "Use only with replace_range; this is the last 1-based line to replace."
+        required: false
+      - name: line
+        type: number
+        description: "Use only with insert_before or insert_after; this is the existing 1-based anchor line."
+        required: false
+      - name: apply
+        type: boolean
+        description: "Leave false for preview. Set true only when the previewed edit is ready to write."
         required: false
