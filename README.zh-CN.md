@@ -93,7 +93,7 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 
 典型参数：
 
-- `path`：扫描根目录，应该尽量传最小可能目录
+- `path`：扫描根目录，应该尽量传最小可能目录；路径值可以包含 `${env:NAME}` 占位符
 - `pattern`：文件名 glob，例如 `*.lua`、`*.md`、`Cargo.*`
 - `recursive`：默认递归；只看直接子项时设为 `false`
 - `noignore`：只有确实需要看生成物或被忽略目录时才设为 `true`
@@ -132,6 +132,7 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 - `start` 超过文件总行数时返回参数错误
 - `count` 超过文件尾部时自动截到 EOF，并在 header 中标记
 - 目录路径只用于快速查看直接子项名称，递归找文件应使用 `vulcan-file-list`
+- 路径值可以包含 `${env:NAME}` 占位符，工具会在访问文件系统前用 Lua `os.getenv` 展开
 
 它不是“翻页猜文件”的工具。还不知道文本在哪里时，应先搜索或列候选文件。
 
@@ -140,6 +141,8 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 当目标文件和目标行已经确认后，用它做小范围文本编辑。
 
 它默认只预览，不写入。只有显式传入 `apply=true` 时才会落盘。
+
+`file` 路径可以包含 `${env:NAME}` 占位符，工具会在访问文件系统前用 Lua `os.getenv` 展开。
 
 支持模式：
 
@@ -280,7 +283,7 @@ python .\scripts\package_skill.py --emit-source-yaml
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.0
+.\scripts\tag_release.ps1 0.1.1
 ```
 
 Unix-like shell：
@@ -288,7 +291,7 @@ Unix-like shell：
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.0
+./scripts/tag_release.sh 0.1.1
 ```
 
 ## 一句话总结

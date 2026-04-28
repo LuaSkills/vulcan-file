@@ -1,5 +1,5 @@
 name: vulcan-file
-version: 0.1.0
+version: 0.1.1
 debug: true
 help:
   main:
@@ -24,7 +24,7 @@ entries:
     parameters:
       - name: file
         type: string
-        description: "Use the file path you already selected. Passing a directory is only for a quick direct-child Name listing; use vulcan-file-list for recursive discovery."
+        description: "Use the file path you already selected. Supports ${env:NAME} placeholders. Passing a directory is only for a quick direct-child Name listing; use vulcan-file-list for recursive discovery."
         required: true
       - name: lines_rule
         type: string
@@ -42,7 +42,7 @@ entries:
     parameters:
       - name: path
         type: string
-        description: "Use the narrowest directory that may contain the target files. Omit only for a project-level map."
+        description: "Use the narrowest directory that may contain the target files. Supports ${env:NAME} placeholders. Omit only for a project-level map."
         required: false
       - name: pattern
         type: string
@@ -68,7 +68,7 @@ entries:
     parameters:
       - name: file
         type: string
-        description: "Use the exact file path to edit."
+        description: "Use the exact file path to edit. Supports ${env:NAME} placeholders."
         required: true
       - name: mode
         type: string

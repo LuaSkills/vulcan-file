@@ -95,7 +95,7 @@ Good fits:
 
 Typical parameters:
 
-- `path`: scan root; pass the narrowest plausible directory.
+- `path`: scan root; pass the narrowest plausible directory. Path values may include `${env:NAME}` placeholders.
 - `pattern`: filename glob, such as `*.lua`, `*.md`, or `Cargo.*`.
 - `recursive`: recursive by default; set to `false` for direct children only.
 - `noignore`: set to `true` only when ignored or generated files are intentionally needed.
@@ -134,6 +134,7 @@ Boundary behavior is explicit:
 - A `start` beyond the total line count returns a parameter error.
 - A `count` that extends past EOF is clipped and marked in the header.
 - Directory paths are only for a quick direct-child name listing; recursive discovery belongs in `vulcan-file-list`.
+- Path values may include `${env:NAME}` placeholders, which are expanded with Lua `os.getenv` before filesystem access.
 
 This is not a tool for guessing through pages. If the text location is unknown, search or list candidates first.
 
@@ -142,6 +143,8 @@ This is not a tool for guessing through pages. If the text location is unknown, 
 Use this for small text edits after the target file and target lines have been confirmed.
 
 It previews by default and does not write. A write only happens when `apply=true` is passed explicitly.
+
+The `file` path may include `${env:NAME}` placeholders, which are expanded with Lua `os.getenv` before filesystem access.
 
 Supported modes:
 
@@ -282,7 +285,7 @@ Recommended local release steps:
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.0
+.\scripts\tag_release.ps1 0.1.1
 ```
 
 Unix-like shell:
@@ -290,7 +293,7 @@ Unix-like shell:
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.0
+./scripts/tag_release.sh 0.1.1
 ```
 
 ## One-Sentence Summary
