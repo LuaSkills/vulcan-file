@@ -1,281 +1,283 @@
 # Vulcan File
 
-`Vulcan File` 的核心定位不是“再包一层文件系统 API”，而是给 Agent 提供一套稳定、低噪声、可继续执行的原文文件操作协议。
+Simplified Chinese: [README.zh-CN.md](README.zh-CN.md)
 
-**CodeKit 帮 Agent 理解代码结构，File 帮 Agent 安全处理原文文件。**
+`Vulcan File` is not "just another filesystem API wrapper." Its core purpose is to give agents a stable, low-noise, execution-friendly protocol for working with raw text files.
 
-它解决的不是“有没有办法读文件”这种基础问题，而是 Agent 在真实工程任务里经常遇到的几个反复成本：
+**CodeKit helps agents understand code structure; File helps agents handle raw files safely.**
 
-- 不想为了列文件写一段平台相关 shell
-- 已经知道目标文件和行号，只想精确读取一小段
-- 需要一次读取多个不相邻片段进行对比
-- 想做一个很小的文本改动，但必须先看到预览
-- 不希望生成物、依赖目录和忽略文件把上下文预算吃光
+It is not solving the basic question of whether files can be read. It solves the repeated costs agents run into during real engineering work:
 
-当前 LuaSkills 新命名采用 `skill_id-entry_name` 的 canonical 形式，因此推荐直接使用：
+- Avoid writing platform-specific shell snippets just to list files.
+- Read a precise slice after the target file and line area are known.
+- Read multiple non-adjacent snippets in one call for comparison.
+- Make a small text edit only after seeing a preview.
+- Avoid wasting context budget on generated files, dependency directories, and ignored paths.
+
+The current LuaSkills naming model uses the canonical `skill_id-entry_name` form, so the recommended tool names are:
 
 - `vulcan-file-list`
 - `vulcan-file-read`
 - `vulcan-file-edit`
 
-在部分 MCP 客户端或宿主绑定里，工具名可能会被转写成下划线形式，例如 `vulcan_file_read`。这只是暴露层命名差异，语义上仍对应同一组 File 入口。
+Some MCP clients or host bindings may expose the same tools with underscores, such as `vulcan_file_read`. That is only a naming difference at the exposure layer; the semantics still map to the same File entries.
 
-它更像一层专门给 Agent 和自动化工程流准备的“文本文件工作台”：
+It is closer to a small text-file workbench built for agents and automated engineering flows:
 
-- 先用低 token 文件地图缩小候选范围
-- 再用明确行号读取原文
-- 再基于已确认上下文预览编辑
-- 最后只在预览符合预期时写入
+- First shrink the candidate set with a low-token file map.
+- Then read raw text with explicit line numbers.
+- Then preview edits based on inspected context.
+- Finally write only when the preview matches the intended change.
 
-一句话：
+In one sentence:
 
-**先定位文件，再读取证据；先看预览，再落盘修改。**
+**Find the file, read the evidence, preview the edit, then write.**
 
-## 这东西到底解决什么问题
+## What Problem It Solves
 
-传统方式当然能完成这些事：
+Traditional tools can absolutely do these jobs:
 
-- `ls` 可以列文件
-- `find` 可以枚举目录
-- `sed` / `awk` / `PowerShell` 可以抽取行号
-- shell 重定向可以改文件
+- `ls` can list files.
+- `find` can enumerate directories.
+- `sed`, `awk`, and `PowerShell` can extract line ranges.
+- Shell redirection can modify files.
 
-但这些工具大多面向人类命令行操作。人类知道当前 shell、平台差异、编码边界和上下文风险，也能在脑子里记住刚刚看到的文件位置。
+But those tools are mostly shaped for humans at a command line. Humans know the current shell, platform differences, encoding boundaries, and contextual risks. They can also remember the file positions they just inspected.
 
-Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作形状。Agent 需要的是：
+In agent workflows, the missing piece is not more raw capability. It is a more stable operation shape. Agents need:
 
-- 输出足够紧凑，方便继续推理
-- 行号稳定，方便后续引用和编辑
-- 参数错误明确，方便自动修正调用
-- 默认遵守 ignore 规则，减少上下文污染
-- 编辑默认只预览，避免误写
+- Compact output that remains useful for follow-up reasoning.
+- Stable line numbers for citations and later edits.
+- Clear parameter errors that can be corrected automatically.
+- Ignore-aware defaults that reduce context pollution.
+- Preview-first editing to avoid accidental writes.
 
-`Vulcan File` 解决的正是这层空缺：
+`Vulcan File` fills that gap:
 
-- 它不只是告诉你“目录里有什么”
-- 它更关心“哪些候选文件值得下一步读取”
-- 它不只是把全文塞给你
-- 它更关心“按明确行段返回可引用的原文证据”
-- 它不只是写文件
-- 它更关心“先生成可审查预览，再由调用方显式确认写入”
+- It does not only say "what is in this directory."
+- It cares about which candidate files are worth reading next.
+- It does not only dump whole files into context.
+- It cares about returning line-addressable raw evidence.
+- It does not only write files.
+- It cares about producing an auditable preview before an explicit write.
 
-## 它和 CodeKit 的边界
+## Boundary With CodeKit
 
-`Vulcan File` 不替代 `Vulcan CodeKit`。
+`Vulcan File` does not replace `Vulcan CodeKit`.
 
-两者的关系更像：
+Their relationship is more like this:
 
-- CodeKit 负责结构理解、owner 定位、函数级源码提取和结构化 patch
-- File 负责普通文本文件的发现、精确读取和小范围文本编辑
+- CodeKit handles structure understanding, owner lookup, function-level source extraction, and structural patching.
+- File handles normal text-file discovery, precise raw reads, and small text edits.
 
-当任务需要理解函数、类、`impl`、Markdown 标题树、AST 结构或完整函数替换时，优先使用 CodeKit。
+When a task needs functions, classes, `impl` blocks, Markdown heading trees, AST structure, or whole-function replacement, prefer CodeKit.
 
-当任务已经明确到“我要看这个文件的这些行”或“我要在这个文件里做一个小文本改动”时，File 更直接、更轻量。
+When the task is already clear enough to say "read these lines from this file" or "make this small text edit in this file," File is more direct and lightweight.
 
-也就是说：
+In short:
 
-**CodeKit 用来理解结构，File 用来处理原文。**
+**CodeKit is for understanding structure; File is for handling raw text.**
 
-## 核心能力
+## Core Capabilities
 
 ### `vulcan-file-list`
 
-在还不知道目标文件在哪里时，先看一个低 token 的文件名地图。
+Use this when the target file is not known yet and you need a low-token file map first.
 
-它返回按目录分组的紧凑文件列表，支持文件名 glob，并默认遵守 `.gitignore`、`.ignore` 和内建高噪声目录忽略规则。
+It returns a compact directory-grouped file list, supports filename globs, and respects `.gitignore`, `.ignore`, and built-in high-noise directory ignores by default.
 
-适合场景：
+Good fits:
 
-- 进入陌生目录前快速建立文件地图
-- 已知道扩展名或文件名形状，想先筛候选文件
-- 避免手写 shell 循环、排序和 ignore 处理
-- 在读取正文前先降低搜索空间
+- Build a quick file map before entering an unfamiliar directory.
+- Filter candidates when the extension or filename shape is known.
+- Avoid ad hoc shell loops, sorting, and ignore-rule handling.
+- Narrow the search space before reading file contents.
 
-典型参数：
+Typical parameters:
 
-- `path`：扫描根目录，应该尽量传最小可能目录
-- `pattern`：文件名 glob，例如 `*.lua`、`*.md`、`Cargo.*`
-- `recursive`：默认递归；只看直接子项时设为 `false`
-- `noignore`：只有确实需要看生成物或被忽略目录时才设为 `true`
-- `limit`：控制最多返回多少候选文件
+- `path`: scan root; pass the narrowest plausible directory.
+- `pattern`: filename glob, such as `*.lua`, `*.md`, or `Cargo.*`.
+- `recursive`: recursive by default; set to `false` for direct children only.
+- `noignore`: set to `true` only when ignored or generated files are intentionally needed.
+- `limit`: cap the number of returned candidate files.
 
-它不是内容搜索工具。如果你手里有日志、错误串、函数名或文本锚点，应该先用 `vulcan-codekit-rg`。
+This is not a content search tool. If you have a log line, error string, function name, or text anchor, use `vulcan-codekit-rg` first.
 
 ### `vulcan-file-read`
 
-当文件路径和大致行号已经明确后，用它读取精确原文。
+Use this after the file path and approximate line area are already known.
 
-它的核心参数是 `lines_rule`，格式是 `start,count`：
+Its core argument is `lines_rule`, using `start,count` format:
 
 ```text
 5,10
 25,30
 ```
 
-这表示从第 5 行读取 10 行，再从第 25 行读取 30 行。多段读取会按请求顺序输出，不会擅自合并重叠区间。
+This reads 10 lines starting at line 5, then 30 lines starting at line 25. Multi-segment reads are rendered in request order, and overlapping ranges are not merged implicitly.
 
-它会返回：
+The result includes:
 
-- 文件路径
-- 总行数
-- 字节数
-- 换行风格
-- 当前展示范围
-- 片段数量
-- 是否因为超过文件尾部而截断
+- File path
+- Total line count
+- Byte count
+- Newline style
+- Displayed line ranges
+- Segment count
+- Whether the request was clipped at EOF
 
-默认会保留 `L12:` 这类稳定行号前缀，便于后续 review、引用或调用 `vulcan-file-edit`。如果只需要纯文本，可以把 `numbered` 设为 `false`。
+By default, it keeps stable prefixes such as `L12:` so later review comments, citations, or `vulcan-file-edit` calls can refer to exact lines. Set `numbered=false` when plain raw text is more useful.
 
-边界行为也很明确：
+Boundary behavior is explicit:
 
-- `start` 与 `count` 必须是正整数
-- `start` 超过文件总行数时返回参数错误
-- `count` 超过文件尾部时自动截到 EOF，并在 header 中标记
-- 目录路径只用于快速查看直接子项名称，递归找文件应使用 `vulcan-file-list`
+- `start` and `count` must be positive integers.
+- A `start` beyond the total line count returns a parameter error.
+- A `count` that extends past EOF is clipped and marked in the header.
+- Directory paths are only for a quick direct-child name listing; recursive discovery belongs in `vulcan-file-list`.
 
-它不是“翻页猜文件”的工具。还不知道文本在哪里时，应先搜索或列候选文件。
+This is not a tool for guessing through pages. If the text location is unknown, search or list candidates first.
 
 ### `vulcan-file-edit`
 
-当目标文件和目标行已经确认后，用它做小范围文本编辑。
+Use this for small text edits after the target file and target lines have been confirmed.
 
-它默认只预览，不写入。只有显式传入 `apply=true` 时才会落盘。
+It previews by default and does not write. A write only happens when `apply=true` is passed explicitly.
 
-支持模式：
+Supported modes:
 
-- `overwrite`：覆盖整个文件
-- `append`：追加到文件尾
-- `replace_range`：替换指定 1-based 行范围
-- `insert_before`：插入到指定行之前
-- `insert_after`：插入到指定行之后
+- `overwrite`: replace the whole file.
+- `append`: append to the end of the file.
+- `replace_range`: replace a 1-based closed line range.
+- `insert_before`: insert before an existing line.
+- `insert_after`: insert after an existing line.
 
-返回结果会包含：
+The result includes:
 
-- 当前状态是 `PREVIEW_ONLY` 还是 `APPLIED`
-- 原始行数与编辑后行数
-- 原始影响范围
-- 编辑后影响范围
-- 面向操作的 diff 预览
-- 参数错误时的明确修正提示
+- Whether the status is `PREVIEW_ONLY` or `APPLIED`
+- Original and edited line counts
+- Original affected span
+- Edited affected span
+- Operation-oriented diff preview
+- Clear correction hints for parameter errors
 
-它刻意不做复杂结构判断。如果目标是完整函数或方法替换，应使用 `vulcan-codekit-patch`；如果需要先理解源码结构，应先使用 CodeKit。
+It deliberately avoids complex structural reasoning. Use `vulcan-codekit-patch` for whole-function or whole-method replacement. Use CodeKit first when source structure must be understood before editing.
 
-## 一套更适合 Agent 的文件工作流
+## A Better File Workflow For Agents
 
-在 `Vulcan File` 里，推荐路径通常不是：
+In `Vulcan File`, the recommended path is usually not:
 
-1. 用 shell 到处列目录
-2. 猜一个文件打开全文
-3. 复制一段脚本改文件
-4. 事后再检查有没有改错
+1. List directories with shell snippets.
+2. Guess a file and open the whole thing.
+3. Copy a small script to edit the file.
+4. Check afterward whether the wrong thing changed.
 
-而是：
+Instead:
 
-1. `list` 获取候选文件地图
-2. `read` 精确读取目标行段
-3. `edit` 生成预览
-4. 预览正确后再次 `edit apply=true`
+1. Use `list` to get a candidate file map.
+2. Use `read` to inspect exact target lines.
+3. Use `edit` to generate a preview.
+4. Use `edit apply=true` only after the preview is correct.
 
-也就是：
+In other words:
 
-**先把文件操作变成可审查的步骤，再让 Agent 继续执行。**
+**Turn file operations into reviewable steps, then let the agent continue.**
 
-这套方式的价值，在以下场景尤其明显：
+This is especially useful for:
 
-- 跨平台开发环境
-- 大仓库中的轻量文件导航
-- README、配置、脚本和普通文本的小改动
-- 需要保留精确行号证据的 review 或修复任务
-- Agent 需要节省上下文预算
-- 不希望默认写文件带来不可见副作用
+- Cross-platform development environments
+- Lightweight navigation in large repositories
+- Small edits to README files, configuration files, scripts, and plain text assets
+- Review or repair work that needs precise line-number evidence
+- Agents that need to conserve context budget
+- Workflows where invisible default writes are unacceptable
 
-## 一个非常现实的对比
+## A Practical Comparison
 
-没有 `Vulcan File` 时，Agent 常常会退回到临时命令：
+Without `Vulcan File`, agents often fall back to temporary commands:
 
 - `Get-ChildItem` / `find`
 - `Select-String` / `grep`
 - `sed -n`
 - `awk`
-- 临时脚本写文件
+- Ad hoc file-writing scripts
 
-这些命令不是不能用，而是每次都要重新决定：
+Those commands work, but each call requires a fresh decision:
 
-- 当前平台是什么
-- 是否需要递归
-- 是否该遵守 ignore
-- 输出会不会太长
-- 行号格式能否直接引用
-- 编辑前有没有足够清晰的预览
+- What platform is this?
+- Should the scan be recursive?
+- Should ignore rules be respected?
+- Will the output be too long?
+- Can the line format be cited directly?
+- Is there a clear enough preview before editing?
 
-有 `Vulcan File` 时，这些问题被固定成三个稳定入口：
+With `Vulcan File`, these concerns are organized into three stable entries:
 
-- 文件候选：`list`
-- 原文证据：`read`
-- 小文本修改：`edit`
+- File candidates: `list`
+- Raw evidence: `read`
+- Small text changes: `edit`
 
-这不是把 shell 能力简单换个名字，而是把常见文件动作整理成 Agent 更容易安全调用的协议。
+This is not shell functionality with a different name. It is a small protocol that makes common file actions safer for agents to call.
 
-## 适合谁
+## Who It Is For
 
-- 正在构建 AI Coding Agent 的团队
-- 想给 MCP 工具体系补充基础文件操作层的平台
-- 需要跨平台稳定文件读写行为的本地 Agent Runtime
-- 经常处理 README、配置、脚本和资源文件的自动化工作流
-- 希望把“先预览、再写入”作为默认编辑纪律的工程团队
+- Teams building AI coding agents
+- Platforms adding a basic file-operation layer to MCP tooling
+- Local agent runtimes that need stable cross-platform file behavior
+- Automated workflows that frequently touch README, config, script, and resource files
+- Engineering teams that want preview-first editing as the default discipline
 
-## 当前包含的工具
+## Included Tools
 
 - `vulcan-file-list`
 - `vulcan-file-read`
 - `vulcan-file-edit`
 
-## 独立仓库说明
+## Repository Notes
 
-当前仓库是 `vulcan-file` LuaSkill 的独立源码仓库，内容对应 LuaSkills 运行时中的正式 skill 包：
+This repository is the standalone source repository for the `vulcan-file` LuaSkill package. It maps to the published skill package used by the LuaSkills runtime:
 
-- `runtime/`：LuaSkill 工具入口
-- `help/`：严格帮助流与各工具说明
-- `overflow_templates/`：预留的本地超限模板目录
-- `resources/`：预留资源目录
-- `licenses/`：第三方声明
-- `scripts/`：校验、打包和发布辅助脚本
+- `runtime/`: LuaSkill tool entries
+- `help/`: strict help flows and per-tool guidance
+- `overflow_templates/`: reserved local overflow-template directory
+- `resources/`: reserved resource directory
+- `licenses/`: third-party notices
+- `scripts/`: validation, packaging, and release helpers
 
-仓库不再作为 demo skill 维护，而是作为 `vulcan-file` 的发布源。发布时会生成标准 LuaSkill 包：
+This repository is no longer maintained as a demo skill. It is the release source for `vulcan-file`. Releases generate the standard LuaSkill artifacts:
 
 - `vulcan-file-v{version}-skill.zip`
 - `vulcan-file-v{version}-checksums.txt`
 
-压缩包内部的顶层目录必须是运行时技能名：
+The top-level directory inside the zip must be the runtime skill name:
 
 - `vulcan-file/`
 
-## 依赖与发布产物
+## Dependencies And Artifacts
 
-`dependencies.yaml` 负责声明运行时依赖。当前 `vulcan-file` 不声明外部 tool、Lua 或 FFI 依赖。
+`dependencies.yaml` declares runtime dependencies. Currently, `vulcan-file` declares no external tool, Lua, or FFI dependencies.
 
-这意味着它的运行时能力完全由 LuaSkills 宿主提供的文件系统、路径和运行时接口承载，不需要额外安装 `rg`、原生动态库或第三方 Lua 包。
+That means its runtime behavior is backed entirely by filesystem, path, and runtime interfaces provided by the LuaSkills host. It does not require `rg`, native dynamic libraries, or third-party Lua packages.
 
-本地校验：
+Local validation:
 
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
 ```
 
-可选 source metadata：
+Optional source metadata:
 
 ```powershell
 python .\scripts\package_skill.py --emit-source-yaml
 ```
 
-生成的 metadata 默认指向 `LuaSkills/vulcan-file` 对应版本的 GitHub Release 资产；如需其他分发渠道，可以传入 `--base-url`。
+The generated metadata points to the matching `LuaSkills/vulcan-file` GitHub Release assets by default. Pass `--base-url` for another distribution channel.
 
-## 发布流程
+## Release Flow
 
-本仓库遵循 LuaSkills 的 GitHub Release 安装规则。推送匹配 `v*` 的标签会触发发布工作流，且标签版本必须与 `skill.yaml.version` 保持一致。
+This repository follows the LuaSkills GitHub Release installation rules. Pushing a tag matching `v*` triggers the release workflow, and the tag version must match `skill.yaml.version`.
 
-推荐本地发布步骤：
+Recommended local release steps:
 
 ```powershell
 python .\scripts\validate_skill.py
@@ -283,7 +285,7 @@ python .\scripts\package_skill.py
 .\scripts\tag_release.ps1 0.1.0
 ```
 
-Unix-like shell：
+Unix-like shell:
 
 ```bash
 python ./scripts/validate_skill.py
@@ -291,10 +293,10 @@ python ./scripts/package_skill.py
 ./scripts/tag_release.sh 0.1.0
 ```
 
-## 一句话总结
+## One-Sentence Summary
 
-**如果说 CodeKit 回答的是“结构在哪里、owner 是谁”，那么 `Vulcan File` 回答的是“文件在哪里、原文是什么、这次文本改动是否已经被预览确认”。**
+**If CodeKit answers "where is the structure, and who owns this code," then `Vulcan File` answers "where is the file, what is the raw text, and has this edit been previewed."**
 
-**CodeKit 帮 Agent 理解代码结构，File 帮 Agent 安全处理原文文件。**
+**CodeKit helps agents understand code structure; File helps agents handle raw files safely.**
 
-这就是它为什么不只是一个文件工具集，而是一层给 Agent 时代准备的轻量文件操作基础设施。
+That is why it is not just a set of file tools. It is a lightweight file-operation layer for the agent era.
