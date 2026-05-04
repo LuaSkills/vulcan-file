@@ -1,6 +1,6 @@
 name: vulcan-file
 version: 0.1.2
-debug: true
+debug: false
 help:
   main:
     description: Help agents decide when to use vulcan-file instead of CodeKit, rg, or shell snippets.
