@@ -4,10 +4,17 @@ Use `vulcan-file` when you need to work with raw file contents directly instead 
 
 Prefer these choices:
 
-- Need to create one brand-new file: use `vulcan-file-create`, preview first, then set `apply=true`.
+- Need to create one brand-new file or a small batch of brand-new files: use `vulcan-file-create`, preview first, then set `apply=true`.
 - Already know the file path and approximate lines: use `vulcan-file-read`.
 - Do not know where the target file is yet: use `vulcan-file-list` first to get one low-token file map.
-- Need one small text change: use `vulcan-file-edit`, preview first, then set `apply=true`.
+- Need one small text change or a few coordinated text changes: use `vulcan-file-edit`, preview first, then set `apply=true`.
+- Need to remove regular files and the host should receive delete metadata: use `vulcan-file-delete`, preview first, then set `apply=true`.
+
+Batch limits:
+
+- `create`, `read`, `edit`, and `delete` accept either one root-level file request or one `files` array.
+- Batch mode supports at most 10 items per call.
+- `apply` is shared by the whole batch.
 
 Avoid these choices:
 
@@ -15,3 +22,4 @@ Avoid these choices:
 - Prefer `vulcan-codekit` when you need functions, classes, or source structure.
 - Use `vulcan-codekit-patch` for whole-function or whole-method replacement.
 - Do not force large refactors through text-only edits before reading structural context.
+- `vulcan-file-delete` does not support directory removal; pass only regular files.

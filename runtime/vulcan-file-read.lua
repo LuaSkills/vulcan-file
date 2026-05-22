@@ -8,6 +8,10 @@ Read one text file or directory with AI-friendly line numbers and compact start,
 -- 当宿主未提供文件读取预算时使用的默认最大返回行数。
 local DEFAULT_LIMIT_LINES = 200
 
+-- Maximum number of files accepted by one batch read call.
+-- 单次批量读取调用允许处理的最大文件数量。
+local MAX_BATCH_FILES = 10
+
 -- Maximum safe positive integer accepted by lines_rule parsing.
 -- lines_rule 解析接受的最大安全正整数。
 local MAX_SAFE_RULE_INTEGER = 9007199254740991
@@ -20,13 +24,16 @@ local MAX_SAFE_RULE_INTEGER_TEXT = "9007199254740991"
 -- 表示调用方传入无效工具参数的错误码集合。
 local PARAMETER_ERROR_CODES = {
     invalid_path = true,
+    invalid_files_argument = true,
+    too_many_files = true,
+    conflicting_batch_arguments = true,
     path_not_found = true,
     environment_variable_not_found = true,
     invalid_environment_variable_reference = true,
     invalid_lines_rule = true,
     invalid_segments_argument = true,
-    conflicting_range_arguments = true,
     range_out_of_bounds = true,
+    conflicting_range_arguments = true,
     invalid_numbered_argument = true,
 }
 
@@ -630,49 +637,237 @@ local function validate_boolean_argument(value, argument_name)
     })
 end
 
+-- Validate one batch `files` array shape and enforce the shared maximum file limit.
+-- 校验批量 `files` 数组形状，并执行共享的最大文件数量限制。
+--
+-- Parameters:
+--     files: Candidate batch file array.
+-- 参数：
+--     files：候选批量文件数组。
+--
+-- Returns:
+--     table|nil: Original array-style batch table on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：成功时返回原始数组形式的批量表。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function validate_batch_files_array(files)
+    if type(files) ~= "table" then
+        return nil, render_error("invalid_files_argument", "files must be an array of file request objects", {
+            actual_type = type(files),
+        })
+    end
+
+    local count = 0
+    for index, _ in ipairs(files) do
+        count = index
+    end
+    if count == 0 then
+        if next(files) ~= nil then
+            return nil, render_error("invalid_files_argument", "files must be an array of file request objects", {
+                actual_type = "table",
+            })
+        end
+        return nil, render_error("invalid_files_argument", "files must contain at least one file request object")
+    end
+    if count > MAX_BATCH_FILES then
+        return nil, render_error("too_many_files", "files may contain at most 10 items", {
+            limit = tostring(MAX_BATCH_FILES),
+            actual_count = tostring(count),
+        })
+    end
+    return files, nil
+end
+
+-- Normalize one single-file read request with inherited numbered defaults.
+-- 使用继承的 numbered 默认值规范化一次单文件读取请求。
+--
+-- Parameters:
+--     request: Raw single-file read request table.
+--     default_numbered: Default line-number flag inherited from the root request.
+-- 参数：
+--     request：原始单文件读取请求表。
+--     default_numbered：从根请求继承的默认行号标记。
+--
+-- Returns:
+--     table|nil: Normalized read request.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：规范化后的读取请求。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function normalize_read_request(request, default_numbered)
+    if type(request) ~= "table" then
+        return nil, render_error("invalid_files_argument", "each files item must be an object with file and optional range settings", {
+            actual_type = type(request),
+        })
+    end
+
+    local numbered_error = validate_boolean_argument(request.numbered, "numbered")
+    if numbered_error then
+        return nil, numbered_error
+    end
+
+    local target_path, path_error = validate_target_path(request.file)
+    if path_error then
+        return nil, path_error
+    end
+
+    local numbered = default_numbered ~= false
+    if request.numbered ~= nil then
+        numbered = request.numbered ~= false
+    end
+    return {
+        file = target_path,
+        segments = request.segments,
+        lines_rule = request.lines_rule,
+        numbered = numbered,
+    }, nil
+end
+
+-- Collect one normalized list of read requests from single-file or batch input.
+-- 从单文件或批量输入中收集一组规范化的读取请求。
+--
+-- Parameters:
+--     args: Raw entry argument table from LuaSkills runtime.
+-- 参数：
+--     args：LuaSkills 运行时传入的原始参数表。
+--
+-- Returns:
+--     table|nil: Array-style normalized request list.
+--     boolean|nil: True when the caller used batch `files` mode.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：数组形式的规范化请求列表。
+--     boolean|nil：调用方使用批量 `files` 模式时返回 true。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function collect_requests(args)
+    local request = type(args) == "table" and args or {}
+    local numbered_error = validate_boolean_argument(request.numbered, "numbered")
+    if numbered_error then
+        return nil, nil, numbered_error
+    end
+
+    if request.files ~= nil then
+        if request.file ~= nil or request.segments ~= nil or request.lines_rule ~= nil then
+            return nil, true, render_error("conflicting_batch_arguments", "use either file/segments/lines_rule or files, not both", {
+                preferred = "files",
+            })
+        end
+        local files, files_error = validate_batch_files_array(request.files)
+        if files_error then
+            return nil, true, files_error
+        end
+        local normalized = {}
+        local default_numbered = request.numbered ~= false
+        for index, item in ipairs(files) do
+            local item_request, item_error = normalize_read_request(item, default_numbered)
+            if item_error then
+                return nil, true, render_error("invalid_files_argument", "one files item is invalid", {
+                    file_index = tostring(index),
+                }) .. "\n\n" .. item_error
+            end
+            table.insert(normalized, item_request)
+        end
+        return normalized, true, nil
+    end
+
+    local single_request, request_error = normalize_read_request(request, request.numbered ~= false)
+    if request_error then
+        return nil, false, request_error
+    end
+    return { single_request }, false, nil
+end
+
 -- Return successful read content with a host-managed truncate overflow hint.
 -- 返回读取成功内容，并显式声明由宿主管理的 truncate 超限策略。
 local function return_read_success(content)
     return content, vulcan.runtime.overflow_type.truncate
 end
 
--- Tool entry point invoked by the LuaSkills runtime.
--- LuaSkills 运行时调用的工具入口。
-return function(args)
-    local request = type(args) == "table" and args or {}
-    local numbered_error = validate_boolean_argument(request.numbered, "numbered")
-    if numbered_error then
-        return numbered_error
-    end
-
-    local target_path, path_error = validate_target_path(request.file)
-    if path_error then
-        return path_error
-    end
-
-    if vulcan.fs.is_dir(target_path) then
-        local names, directory_error = read_directory_entries(target_path)
+-- Execute one normalized single-file read request.
+-- 执行一次规范化后的单文件读取请求。
+--
+-- Parameters:
+--     request: Normalized read request with resolved path and range settings.
+-- 参数：
+--     request：带有已解析路径和范围设置的规范化读取请求。
+--
+-- Returns:
+--     string|nil: Successful read payload.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     string|nil：成功时返回读取结果文本。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function execute_single_read(request)
+    if vulcan.fs.is_dir(request.file) then
+        local names, directory_error = read_directory_entries(request.file)
         if directory_error then
-            return directory_error
+            return nil, directory_error
         end
-        return return_read_success(render_directory_listing(target_path, names))
+        return render_directory_listing(request.file, names), nil
     end
 
-    local content, read_error = read_file(target_path)
+    local content, read_error = read_file(request.file)
     if read_error then
-        return read_error
+        return nil, read_error
     end
 
     local lines = split_lines(content)
     local ranges, metadata_or_error = resolve_display_ranges(request, lines)
     if type(metadata_or_error) == "string" then
-        return metadata_or_error
+        return nil, metadata_or_error
     end
 
-    local numbered = request.numbered ~= false
-    local header = render_header(target_path, content, lines, ranges or {}, metadata_or_error)
+    local header = render_header(request.file, content, lines, ranges or {}, metadata_or_error)
     if #lines == 0 then
-        return return_read_success(header .. "\n\n(empty file)")
+        return header .. "\n\n(empty file)", nil
     end
-    return return_read_success(header .. "\n" .. render_ranges(lines, ranges or {}, numbered))
+    return header .. "\n" .. render_ranges(lines, ranges or {}, request.numbered ~= false), nil
+end
+
+-- Render one combined batch read payload with lightweight separators between file results.
+-- 使用轻量分隔线渲染一个合并后的批量读取结果。
+--
+-- Parameters:
+--     outputs: Array-style successful read payload list.
+-- 参数：
+--     outputs：数组形式的成功读取结果文本列表。
+--
+-- Returns:
+--     string: Combined batch read payload.
+-- 返回值：
+--     string：合并后的批量读取结果文本。
+local function render_batch_result(outputs)
+    local lines = {
+        string.format("[BatchFileRead Files:%d Limit:%d]", #(outputs or {}), MAX_BATCH_FILES),
+    }
+    for index, item in ipairs(outputs or {}) do
+        table.insert(lines, "")
+        table.insert(lines, string.format("--- File %d/%d ---", index, #outputs))
+        table.insert(lines, tostring(item or ""))
+    end
+    return table.concat(lines, "\n")
+end
+
+-- Tool entry point invoked by the LuaSkills runtime.
+-- LuaSkills 运行时调用的工具入口。
+return function(args)
+    local requests, is_batch, request_error = collect_requests(args)
+    if request_error then
+        return request_error
+    end
+
+    local outputs = {}
+    for _, request in ipairs(requests or {}) do
+        local output, execution_error = execute_single_read(request)
+        if execution_error then
+            return execution_error
+        end
+        table.insert(outputs, output)
+    end
+
+    if is_batch then
+        return return_read_success(render_batch_result(outputs))
+    end
+    return return_read_success(outputs[1] or "")
 end

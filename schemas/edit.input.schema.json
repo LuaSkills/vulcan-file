@@ -36,14 +36,74 @@
       "minimum": 1,
       "description": "Use only with insert_before or insert_after; this must point to an existing 1-based anchor line. Out-of-range values return line_out_of_bounds instead of appending."
     },
+    "files": {
+      "type": "array",
+      "description": "Use for batch file edits. Provide up to 10 items, each with file, mode, content, and any mode-specific line arguments. Do not send this field together with root-level single-file edit arguments.",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Use the exact file path to edit for this batch item. Supports ${env:NAME} placeholders."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "append",
+              "replace_range",
+              "insert_before",
+              "insert_after"
+            ],
+            "description": "Choose overwrite, append, replace_range, insert_before, or insert_after for this batch item."
+          },
+          "content": {
+            "type": "string",
+            "description": "Use the complete replacement or insertion text for this batch item."
+          },
+          "start_line": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Use only with replace_range; this is the first existing 1-based line to replace for this batch item."
+          },
+          "end_line": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Use only with replace_range; this is the last existing 1-based line to replace for this batch item."
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Use only with insert_before or insert_after; this must point to an existing 1-based anchor line for this batch item."
+          }
+        },
+        "required": [
+          "file",
+          "mode",
+          "content"
+        ]
+      }
+    },
     "apply": {
       "type": "boolean",
-      "description": "Leave false for preview. Set true only when the previewed edit is ready to write."
+      "description": "Leave false for preview. Set true only when the previewed edit is ready to write. In batch mode this apply flag is shared by all files."
     }
   },
-  "required": [
-    "file",
-    "mode",
-    "content"
+  "oneOf": [
+    {
+      "required": [
+        "file",
+        "mode",
+        "content"
+      ]
+    },
+    {
+      "required": [
+        "files"
+      ]
+    }
   ]
 }

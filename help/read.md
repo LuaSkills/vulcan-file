@@ -7,6 +7,7 @@ Good fits:
 - You already found one candidate file with `vulcan-file-list` or `vulcan-codekit-rg`.
 - You need the exact text near one known line range.
 - You want to read multiple non-adjacent snippets in one call for comparison.
+- You want to batch up to 10 known file reads in one call.
 - You only need a quick direct-child name listing and can pass a directory path as `file`.
 
 Not a good fit:
@@ -17,10 +18,12 @@ Not a good fit:
 
 Parameter choices:
 
-- `file`: pass one selected file path; a directory path is only for a quick direct-child name listing; `${env:NAME}` placeholders are supported.
+- Single-file mode: send root-level `file`, plus optional `segments`, `lines_rule`, or `numbered`.
+- Batch mode: send `files` as an array of objects. Each item must include `file` and may override `segments`, `lines_rule`, or `numbered`.
+- Batch mode accepts at most 10 items.
+- In batch mode, root `numbered` acts as the default for all items unless an item overrides it.
 - `segments`: prefer this structured array parameter; each item uses `{ "start": start_line, "count": line_count }`; when omitted, the tool reads from the beginning of the file using the host `file_read` budget, with a 200-line fallback.
 - `lines_rule`: legacy fallback for clients that cannot send arrays; it still uses `start,count` and separates multiple rules with `\n` inside the string; do not send it together with `segments`.
-- `numbered`: line numbers are kept by default and should usually stay enabled when later citation or editing is likely; set `false` only to remove the `L<number>:` prefixes from content lines.
 
 Preferred structured array form:
 
@@ -30,6 +33,26 @@ Preferred structured array form:
   "segments": [
     { "start": 5, "count": 10 },
     { "start": 25, "count": 30 }
+  ]
+}
+```
+
+Batch form:
+
+```json
+{
+  "numbered": true,
+  "files": [
+    {
+      "file": "src/example.lua",
+      "segments": [
+        { "start": 5, "count": 10 }
+      ]
+    },
+    {
+      "file": "README.md",
+      "lines_rule": "1,20"
+    }
   ]
 }
 ```
@@ -67,6 +90,7 @@ Boundary behavior:
 - Overlapping segments are not merged; they are rendered in request order.
 - The literal word `"newline"` returns `invalid_lines_rule`; use `\n` in the JSON string instead.
 - Sending both `segments` and `lines_rule` returns `conflicting_range_arguments`.
+- Sending both root-level single-file arguments and `files` returns `conflicting_batch_arguments`.
+- Directory reads include the directory path, entry count, and one `Name` column list.
 
 The response includes the file path, total line count, byte count, newline style, displayed line ranges, segment count, and whether the request clipped at EOF.
-Directory reads include the directory path, entry count, and one `Name` column list.

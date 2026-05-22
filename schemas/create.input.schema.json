@@ -10,13 +10,46 @@
       "type": "string",
       "description": "Use the complete content for the brand-new file. Empty content is allowed and creates an empty file."
     },
+    "files": {
+      "type": "array",
+      "description": "Use for batch file creation. Provide up to 10 items, each with file and content. Do not send this field together with root-level file/content.",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Use the exact file path to create for this batch item. Supports ${env:NAME} placeholders."
+          },
+          "content": {
+            "type": "string",
+            "description": "Use the complete content for this brand-new file. Empty content is allowed and creates an empty file."
+          }
+        },
+        "required": [
+          "file",
+          "content"
+        ]
+      }
+    },
     "apply": {
       "type": "boolean",
-      "description": "Leave false for preview. Set true only when the previewed file creation is ready to write."
+      "description": "Leave false for preview. Set true only when the previewed file creation is ready to write. In batch mode this apply flag is shared by all files."
     }
   },
-  "required": [
-    "file",
-    "content"
+  "oneOf": [
+    {
+      "required": [
+        "file",
+        "content"
+      ]
+    },
+    {
+      "required": [
+        "files"
+      ]
+    }
   ]
 }

@@ -1,14 +1,15 @@
 # `vulcan-file-create`
 
-Use this tool when you want to create one file that does not exist yet and you want a preview before writing it.
+Use this tool when you want to create one file that does not exist yet, or a small batch of brand-new files, and you want a preview before writing.
 
 Good fits:
 
 - The target file does not exist yet.
 - The full target path and full file content are already known.
 - You want a clear separation between creating a new file and editing an existing one.
-- The host should receive one structured `change_set` create record when supported.
+- The host should receive structured `change_set` create records when supported.
 - The `file` path may use `${env:NAME}` placeholders.
+- Batch mode should create at most 10 files in one call.
 
 Not a good fit:
 
@@ -16,7 +17,12 @@ Not a good fit:
 - You only need to append or replace a small amount of text in one existing file; use `vulcan-file-edit` instead.
 - You do not know where the file should be created yet; use `vulcan-file-list` or another search tool first.
 
-`apply=false` by default, so the tool returns only a preview. The file is written only when `apply=true` is passed explicitly.
+Parameter choices:
+
+- Single-file mode: send root-level `file` and `content`.
+- Batch mode: send `files` as an array of `{ "file": "...", "content": "..." }` objects.
+- Batch mode accepts at most 10 items.
+- `apply=false` by default, so the tool returns only a preview. The files are written only when `apply=true` is passed explicitly, and in batch mode that one flag applies to every item.
 
 Boundary behavior:
 
@@ -24,4 +30,4 @@ Boundary behavior:
 - Missing parent directories return `parent_directory_not_found`.
 - Parent paths that exist but are not directories return `parent_path_not_directory`.
 - `content=""` is valid and creates an empty file.
-- The preview shows at most 80 lines of context; larger previews are marked with `preview truncated`.
+- The preview shows at most 80 lines of context per file; larger previews are marked with `preview truncated`.

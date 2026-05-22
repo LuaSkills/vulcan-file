@@ -1,7 +1,7 @@
 --[[
 vulcan-file-edit
-Preview or apply one small text edit while preserving a stable text contract and optional host change_set output.
-在保持稳定文本契约与可选宿主 change_set 输出的前提下，预览或应用一次小范围文本编辑。
+Preview or apply one or more small text edits while preserving a stable text contract and optional host change_set output.
+在保持稳定文本契约与可选宿主 change_set 输出的前提下，预览或应用一个或多个小范围文本编辑。
 ]]
 
 -- Visible Markdown title used for edit error payloads.
@@ -30,6 +30,9 @@ local SUPPORTED_MODES = {
 -- 表示调用方传入无效工具参数的错误码集合。
 local PARAMETER_ERROR_CODES = {
     invalid_file = true,
+    invalid_files_argument = true,
+    too_many_files = true,
+    conflicting_batch_arguments = true,
     file_is_directory = true,
     file_not_found = true,
     environment_variable_not_found = true,
@@ -99,10 +102,12 @@ end
 --
 -- Parameters:
 --     helpers: Shared helper table.
---     args: Raw entry argument table from LuaSkills runtime.
+--     request: Raw single-file request table.
+--     apply: Shared apply flag inherited from the root request.
 -- 参数：
 --     helpers：共享辅助表。
---     args：LuaSkills 运行时传入的原始参数表。
+--     request：原始单文件请求表。
+--     apply：从根请求继承的统一 apply 标记。
 --
 -- Returns:
 --     table|nil: Normalized request table on success.
@@ -110,8 +115,12 @@ end
 -- 返回值：
 --     table|nil：成功时返回规范化后的请求表。
 --     string|nil：失败时返回 Markdown 错误文本。
-local function validate_request(helpers, args)
-    local request = type(args) == "table" and args or {}
+local function validate_single_request(helpers, request, apply)
+    if type(request) ~= "table" then
+        return nil, render_error(helpers, "invalid_files_argument", "each files item must be an object with file, mode, and content", {
+            actual_type = type(request),
+        })
+    end
     if type(request.file) ~= "string" or helpers.trim(request.file) == "" then
         return nil, render_error(helpers, "invalid_file", "file must be a non-empty string")
     end
@@ -129,10 +138,6 @@ local function validate_request(helpers, args)
     if environment_error then
         return nil, environment_error
     end
-    local apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, request.apply, "apply")
-    if apply_error then
-        return nil, apply_error
-    end
 
     return {
         file = file_path,
@@ -141,8 +146,63 @@ local function validate_request(helpers, args)
         start_line = request.start_line,
         end_line = request.end_line,
         line = request.line,
-        apply = request.apply == true,
+        apply = apply == true,
     }, nil
+end
+
+-- Collect one normalized list of edit requests from single-file or batch input.
+-- 从单文件或批量输入中收集一组规范化的编辑请求。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     args: Raw entry argument table from LuaSkills runtime.
+-- 参数：
+--     helpers：共享辅助表。
+--     args：LuaSkills 运行时传入的原始参数表。
+--
+-- Returns:
+--     table|nil: Array-style normalized request list.
+--     boolean|nil: True when the caller used batch `files` mode.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：数组形式的规范化请求列表。
+--     boolean|nil：调用方使用批量 `files` 模式时返回 true。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function collect_requests(helpers, args)
+    local request = type(args) == "table" and args or {}
+    local apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, request.apply, "apply")
+    if apply_error then
+        return nil, nil, apply_error
+    end
+
+    if request.files ~= nil then
+        if request.file ~= nil or request.mode ~= nil or request.content ~= nil or request.start_line ~= nil or request.end_line ~= nil or request.line ~= nil then
+            return nil, true, render_error(helpers, "conflicting_batch_arguments", "use either single-file edit arguments or files, not both", {
+                preferred = "files",
+            })
+        end
+        local files, files_error = helpers.validate_batch_files_array(ERROR_TITLE, PARAMETER_ERROR_CODES, request.files)
+        if files_error then
+            return nil, true, files_error
+        end
+        local normalized = {}
+        for index, item in ipairs(files) do
+            local item_request, item_error = validate_single_request(helpers, item, request.apply == true)
+            if item_error then
+                return nil, true, render_error(helpers, "invalid_files_argument", "one files item is invalid", {
+                    file_index = tostring(index),
+                }) .. "\n\n" .. item_error
+            end
+            table.insert(normalized, item_request)
+        end
+        return normalized, true, nil
+    end
+
+    local single_request, validation_error = validate_single_request(helpers, request, request.apply == true)
+    if validation_error then
+        return nil, false, validation_error
+    end
+    return { single_request }, false, nil
 end
 
 -- Read one existing file or return an empty baseline for overwrite-based file creation.
@@ -356,57 +416,6 @@ local function build_edited_content(helpers, request, original_content)
     }, nil
 end
 
--- Render the final edit result while preserving the current Markdown contract.
--- 在保持当前 Markdown 契约的前提下渲染最终编辑结果。
---
--- Parameters:
---     helpers: Shared helper table.
---     request: Normalized edit request.
---     original_content: Original file content.
---     edited_content: Edited file content.
---     changed_span: Changed span metadata.
--- 参数：
---     helpers：共享辅助表。
---     request：规范化后的编辑请求。
---     original_content：原始文件内容。
---     edited_content：编辑后的文件内容。
---     changed_span：变更区间元数据。
---
--- Returns:
---     string: Markdown success payload.
--- 返回值：
---     string：Markdown 成功结果文本。
-local function render_result(helpers, request, original_content, edited_content, changed_span)
-    local status = request.apply and "APPLIED" or "PREVIEW_ONLY"
-    local original_lines = select(1, helpers.split_lines_with_final_newline(original_content))
-    local edited_lines = select(1, helpers.split_lines_with_final_newline(edited_content))
-    local original_start_line = changed_span.original_start_line or changed_span.start_line
-    local original_end_line = changed_span.original_end_line or changed_span.end_line
-    local original_span = "none"
-    if original_start_line >= 1 and original_start_line <= original_end_line and original_end_line <= #original_lines then
-        original_span = string.format("L%d-L%d", original_start_line, original_end_line)
-    end
-    local edited_span = "none"
-    if (changed_span.inserted_line_count or 0) > 0 then
-        edited_span = string.format("L%d-L%d", changed_span.start_line, changed_span.end_line)
-    end
-    local lines = {
-        "# " .. RESULT_TITLE,
-        "",
-        "- status: `" .. status .. "`",
-        "- file: `" .. request.file .. "`",
-        "- mode: `" .. request.mode .. "`",
-        "- original_lines: `" .. tostring(#original_lines) .. "`",
-        "- edited_lines: `" .. tostring(#edited_lines) .. "`",
-        "- original_span: `" .. original_span .. "`",
-        "- edited_span: `" .. edited_span .. "`",
-        "- changed_span: `original " .. original_span .. " -> edited " .. edited_span .. "`",
-        "",
-        helpers.render_operation_preview(request.mode, request.content, original_content, edited_content, changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
-    }
-    return table.concat(lines, "\n")
-end
-
 -- Determine which canonical host change type should represent the edit result.
 -- 判断哪个 canonical 宿主变更类型最适合表示本次编辑结果。
 --
@@ -426,6 +435,226 @@ local function determine_change_type(request, existed_before)
         return "create"
     end
     return "modify"
+end
+
+-- Prepare one validated edit operation before preview rendering or disk writes.
+-- 在预览渲染或落盘写入前准备一次已校验的编辑操作。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     request: Normalized edit request.
+-- 参数：
+--     helpers：共享辅助表。
+--     request：规范化后的编辑请求。
+--
+-- Returns:
+--     table|nil: Prepared operation summary on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：成功时返回已准备的操作摘要。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function prepare_operation(helpers, request)
+    local original_content, read_error, existed_before = read_existing_file(helpers, request.file, request.mode)
+    if read_error then
+        return nil, read_error
+    end
+
+    local edited_content, changed_span, edit_error = build_edited_content(helpers, request, original_content)
+    if edit_error then
+        return nil, edit_error
+    end
+
+    local change_type = determine_change_type(request, existed_before)
+    local file_record = nil
+    if change_type == "create" then
+        file_record = helpers.build_create_file_record(request.file, edited_content)
+    else
+        file_record = helpers.build_modify_file_record(request.file, original_content, edited_content, changed_span)
+    end
+    return {
+        request = request,
+        original_content = original_content,
+        edited_content = edited_content,
+        changed_span = changed_span,
+        change_type = change_type,
+        file_record = file_record,
+    }, nil
+end
+
+-- Apply all prepared edit operations in request order.
+-- 按请求顺序落盘执行全部已准备的编辑操作。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     operations: Array-style prepared operation list.
+-- 参数：
+--     helpers：共享辅助表。
+--     operations：数组形式的已准备操作列表。
+--
+-- Returns:
+--     string|nil: Markdown error text on failure, otherwise nil.
+-- 返回值：
+--     string|nil：失败时返回 Markdown 错误文本，否则返回 nil。
+local function apply_operations(helpers, operations)
+    for _, operation in ipairs(operations or {}) do
+        local write_error = helpers.write_file(ERROR_TITLE, PARAMETER_ERROR_CODES, operation.request.file, operation.edited_content, operation.original_content)
+        if write_error then
+            return write_error
+        end
+    end
+    return nil
+end
+
+-- Render the final edit result while preserving the current Markdown contract for single-file calls.
+-- 在保持单文件调用当前 Markdown 契约的前提下渲染最终编辑结果。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     operation: Prepared single-file operation.
+-- 参数：
+--     helpers：共享辅助表。
+--     operation：已准备的单文件操作。
+--
+-- Returns:
+--     string: Markdown success payload.
+-- 返回值：
+--     string：Markdown 成功结果文本。
+local function render_single_result(helpers, operation)
+    local request = operation.request
+    local original_lines = select(1, helpers.split_lines_with_final_newline(operation.original_content))
+    local edited_lines = select(1, helpers.split_lines_with_final_newline(operation.edited_content))
+    local original_start_line = operation.changed_span.original_start_line or operation.changed_span.start_line
+    local original_end_line = operation.changed_span.original_end_line or operation.changed_span.end_line
+    local original_span = "none"
+    if original_start_line >= 1 and original_start_line <= original_end_line and original_end_line <= #original_lines then
+        original_span = string.format("L%d-L%d", original_start_line, original_end_line)
+    end
+    local edited_span = "none"
+    if (operation.changed_span.inserted_line_count or 0) > 0 then
+        edited_span = string.format("L%d-L%d", operation.changed_span.start_line, operation.changed_span.end_line)
+    end
+    local lines = {
+        "# " .. RESULT_TITLE,
+        "",
+        "- status: `" .. (request.apply and "APPLIED" or "PREVIEW_ONLY") .. "`",
+        "- file: `" .. request.file .. "`",
+        "- mode: `" .. request.mode .. "`",
+        "- original_lines: `" .. tostring(#original_lines) .. "`",
+        "- edited_lines: `" .. tostring(#edited_lines) .. "`",
+        "- original_span: `" .. original_span .. "`",
+        "- edited_span: `" .. edited_span .. "`",
+        "- changed_span: `original " .. original_span .. " -> edited " .. edited_span .. "`",
+        "",
+        helpers.render_operation_preview(request.mode, request.content, operation.original_content, operation.edited_content, operation.changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
+    }
+    return table.concat(lines, "\n")
+end
+
+-- Render a compact per-file batch section for edit results.
+-- 为编辑结果渲染紧凑的按文件批量分节。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     operation: Prepared edit operation.
+--     file_index: 1-based file index in the batch.
+--     total_files: Total number of files in the batch.
+-- 参数：
+--     helpers：共享辅助表。
+--     operation：已准备的编辑操作。
+--     file_index：批量中的 1-based 文件序号。
+--     total_files：批量中的文件总数。
+--
+-- Returns:
+--     string: Markdown section for one batch item.
+-- 返回值：
+--     string：单个批量项的 Markdown 分节文本。
+local function render_batch_section(helpers, operation, file_index, total_files)
+    local original_lines = select(1, helpers.split_lines_with_final_newline(operation.original_content))
+    local edited_lines = select(1, helpers.split_lines_with_final_newline(operation.edited_content))
+    local original_start_line = operation.changed_span.original_start_line or operation.changed_span.start_line
+    local original_end_line = operation.changed_span.original_end_line or operation.changed_span.end_line
+    local original_span = "none"
+    if original_start_line >= 1 and original_start_line <= original_end_line and original_end_line <= #original_lines then
+        original_span = string.format("L%d-L%d", original_start_line, original_end_line)
+    end
+    local edited_span = "none"
+    if (operation.changed_span.inserted_line_count or 0) > 0 then
+        edited_span = string.format("L%d-L%d", operation.changed_span.start_line, operation.changed_span.end_line)
+    end
+    local lines = {
+        "## File " .. tostring(file_index) .. "/" .. tostring(total_files),
+        "",
+        "- file: `" .. operation.request.file .. "`",
+        "- mode: `" .. operation.request.mode .. "`",
+        "- change: `" .. operation.change_type .. "`",
+        "- original_lines: `" .. tostring(#original_lines) .. "`",
+        "- edited_lines: `" .. tostring(#edited_lines) .. "`",
+        "- original_span: `" .. original_span .. "`",
+        "- edited_span: `" .. edited_span .. "`",
+        "",
+        helpers.render_operation_preview(operation.request.mode, operation.request.content, operation.original_content, operation.edited_content, operation.changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
+    }
+    return table.concat(lines, "\n")
+end
+
+-- Render the final batch edit result with one top-level summary and per-file sections.
+-- 使用一个顶层摘要和逐文件分节渲染最终批量编辑结果。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     operations: Array-style prepared operation list.
+--     apply: Whether the batch has been written to disk.
+-- 参数：
+--     helpers：共享辅助表。
+--     operations：数组形式的已准备操作列表。
+--     apply：该批量是否已落盘。
+--
+-- Returns:
+--     string: Markdown batch success payload.
+-- 返回值：
+--     string：Markdown 批量成功结果文本。
+local function render_batch_result(helpers, operations, apply)
+    local lines = {
+        "# " .. RESULT_TITLE,
+        "",
+        "- status: `" .. (apply and "APPLIED" or "PREVIEW_ONLY") .. "`",
+        "- files: `" .. tostring(#(operations or {})) .. "`",
+        "- limit: `" .. tostring(helpers.MAX_BATCH_FILES or 10) .. "`",
+    }
+    for index, operation in ipairs(operations or {}) do
+        table.insert(lines, "")
+        table.insert(lines, render_batch_section(helpers, operation, index, #operations))
+    end
+    return table.concat(lines, "\n")
+end
+
+-- Build one aggregated host `change_set` result for batch and single edit calls.
+-- 为批量和单文件编辑调用构造一个聚合宿主 `change_set` 结果。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     capability: Capability snapshot from resolve_host_result_capability.
+--     operations: Array-style prepared operation list.
+--     apply: Whether the operation has been written to disk.
+-- 参数：
+--     helpers：共享辅助表。
+--     capability：来自 resolve_host_result_capability 的能力快照。
+--     operations：数组形式的已准备操作列表。
+--     apply：操作是否已经落盘。
+--
+-- Returns:
+--     table|nil: Optional host structured change_set result.
+-- 返回值：
+--     table|nil：可选的宿主结构化 change_set 结果。
+local function build_host_result(helpers, capability, operations, apply)
+    local file_records = {}
+    for _, operation in ipairs(operations or {}) do
+        if type(operation.file_record) == "table" then
+            table.insert(file_records, operation.file_record)
+        end
+    end
+    local summary = string.format("%s %d file edit%s.", apply and "Applied" or "Previewed", #file_records, #file_records == 1 and "" or "s")
+    return helpers.build_change_set_host_result(capability, apply, summary, file_records)
 end
 
 -- Run the edit entry with shared helpers and optional host change_set output.
@@ -448,30 +677,32 @@ end
 --     table|nil：可选的宿主结构化 change_set 结果。
 return function(args)
     local helpers = load_shared_file_helpers()
-    local request, validation_error = validate_request(helpers, args)
+    local requests, is_batch, validation_error = collect_requests(helpers, args)
     if validation_error then
         return validation_error
     end
 
-    local capability = helpers.resolve_host_result_capability()
-    local original_content, read_error, existed_before = read_existing_file(helpers, request.file, request.mode)
-    if read_error then
-        return read_error
+    local operations = {}
+    for _, request in ipairs(requests or {}) do
+        local operation, operation_error = prepare_operation(helpers, request)
+        if operation_error then
+            return operation_error
+        end
+        table.insert(operations, operation)
     end
 
-    local edited_content, changed_span, edit_error = build_edited_content(helpers, request, original_content)
-    if edit_error then
-        return edit_error
-    end
-
-    if request.apply then
-        local write_error = helpers.write_file(ERROR_TITLE, PARAMETER_ERROR_CODES, request.file, edited_content, original_content)
+    local apply = requests[1] and requests[1].apply == true
+    if apply then
+        local write_error = apply_operations(helpers, operations)
         if write_error then
             return write_error
         end
     end
 
-    local change_type = determine_change_type(request, existed_before)
-    local host_result = helpers.build_edit_host_result(capability, request.file, original_content, edited_content, changed_span, request.apply, change_type)
-    return render_result(helpers, request, original_content, edited_content, changed_span), nil, nil, host_result
+    local capability = helpers.resolve_host_result_capability()
+    local host_result = build_host_result(helpers, capability, operations, apply)
+    if is_batch then
+        return render_batch_result(helpers, operations, apply), nil, nil, host_result
+    end
+    return render_single_result(helpers, operations[1]), nil, nil, host_result
 end

@@ -1,23 +1,23 @@
 --[[
-vulcan-file-create
-Preview or create one or more brand-new files with preview-first semantics and optional host change_set output.
-以预览优先语义和可选宿主 change_set 输出预览或创建一个或多个全新文件。
+vulcan-file-delete
+Preview or delete one or more regular files with explicit directory rejection and optional host change_set output.
+以显式拒绝目录和可选宿主 change_set 输出预览或删除一个或多个普通文件。
 ]]
 
--- Visible Markdown title used for create error payloads.
--- 创建错误结果使用的可见 Markdown 标题。
-local ERROR_TITLE = "FILE CREATE ERROR"
+-- Visible Markdown title used for delete error payloads.
+-- 删除错误结果使用的可见 Markdown 标题。
+local ERROR_TITLE = "FILE DELETE ERROR"
 
--- Visible Markdown title used for create success payloads.
--- 创建成功结果使用的可见 Markdown 标题。
-local RESULT_TITLE = "FILE CREATE RESULT"
+-- Visible Markdown title used for delete success payloads.
+-- 删除成功结果使用的可见 Markdown 标题。
+local RESULT_TITLE = "FILE DELETE RESULT"
 
 -- Visible section title used for preview blocks.
 -- 预览区块使用的可见标题。
 local PREVIEW_TITLE = "Preview"
 
--- Error codes that indicate the caller passed invalid create arguments.
--- 表示调用方传入无效创建参数的错误码集合。
+-- Error codes that indicate the caller passed invalid delete arguments.
+-- 表示调用方传入无效删除参数的错误码集合。
 local PARAMETER_ERROR_CODES = {
     invalid_file = true,
     invalid_files_argument = true,
@@ -25,11 +25,9 @@ local PARAMETER_ERROR_CODES = {
     conflicting_batch_arguments = true,
     environment_variable_not_found = true,
     invalid_environment_variable_reference = true,
-    invalid_content = true,
     invalid_apply_argument = true,
-    file_already_exists = true,
-    parent_directory_not_found = true,
-    parent_path_not_directory = true,
+    file_not_found = true,
+    directory_delete_unsupported = true,
 }
 
 -- Load the shared file helper module from the current entry directory.
@@ -41,9 +39,9 @@ local PARAMETER_ERROR_CODES = {
 --     无。
 --
 -- Returns:
---     table: Shared helper table used by create and edit entries.
+--     table: Shared helper table used by file mutation entries.
 -- 返回值：
---     table：create 与 edit 入口共用的辅助表。
+--     table：文件变更入口共用的辅助表。
 local function load_shared_file_helpers()
     local entry_dir = tostring(vulcan.context.entry_dir or ".")
     local helper_path = vulcan.path.join(entry_dir, "shared_file.lua")
@@ -81,8 +79,8 @@ local function render_error(helpers, error_code, message, details)
     return helpers.render_error(ERROR_TITLE, PARAMETER_ERROR_CODES, error_code, message, details)
 end
 
--- Validate the create request and normalize the target path to absolute form.
--- 校验创建请求，并将目标路径规范化为绝对路径。
+-- Validate the delete request and normalize the target path to absolute form.
+-- 校验删除请求，并将目标路径规范化为绝对路径。
 --
 -- Parameters:
 --     helpers: Shared helper table.
@@ -94,22 +92,19 @@ end
 --     apply：从根请求继承的统一 apply 标记。
 --
 -- Returns:
---     table|nil: Normalized create request on success.
+--     table|nil: Normalized delete request on success.
 --     string|nil: Markdown error text on failure.
 -- 返回值：
---     table|nil：成功时返回规范化后的创建请求。
+--     table|nil：成功时返回规范化后的删除请求。
 --     string|nil：失败时返回 Markdown 错误文本。
 local function validate_single_request(helpers, request, apply)
     if type(request) ~= "table" then
-        return nil, render_error(helpers, "invalid_files_argument", "each files item must be an object with file and content", {
+        return nil, render_error(helpers, "invalid_files_argument", "each files item must be an object with file", {
             actual_type = type(request),
         })
     end
     if type(request.file) ~= "string" or helpers.trim(request.file) == "" then
         return nil, render_error(helpers, "invalid_file", "file must be a non-empty string")
-    end
-    if type(request.content) ~= "string" then
-        return nil, render_error(helpers, "invalid_content", "content must be a string")
     end
 
     local file_path, environment_error = helpers.expand_environment_path(ERROR_TITLE, PARAMETER_ERROR_CODES, helpers.trim(request.file), "file")
@@ -119,13 +114,12 @@ local function validate_single_request(helpers, request, apply)
 
     return {
         file = file_path,
-        content = request.content,
         apply = apply == true,
     }, nil
 end
 
--- Collect one normalized list of create requests from single-file or batch input.
--- 从单文件或批量输入中收集一组规范化的创建请求。
+-- Collect one normalized list of delete requests from single-file or batch input.
+-- 从单文件或批量输入中收集一组规范化的删除请求。
 --
 -- Parameters:
 --     helpers: Shared helper table.
@@ -150,8 +144,8 @@ local function collect_requests(helpers, args)
     end
 
     if request.files ~= nil then
-        if request.file ~= nil or request.content ~= nil then
-            return nil, true, render_error(helpers, "conflicting_batch_arguments", "use either file/content or files, not both", {
+        if request.file ~= nil then
+            return nil, true, render_error(helpers, "conflicting_batch_arguments", "use either file or files, not both", {
                 preferred = "files",
             })
         end
@@ -179,8 +173,8 @@ local function collect_requests(helpers, args)
     return { single_request }, false, nil
 end
 
--- Verify that the target file does not already exist and that its parent directory is usable.
--- 校验目标文件尚不存在，且其父目录可用于写入。
+-- Validate that one target path exists and points to a regular file.
+-- 校验目标路径存在且指向普通文件。
 --
 -- Parameters:
 --     helpers: Shared helper table.
@@ -190,75 +184,84 @@ end
 --     file_path：绝对目标文件路径。
 --
 -- Returns:
---     string|nil: Parent directory path on success.
---     string|nil: Markdown error text on failure.
+--     string|nil: Nil on success, otherwise Markdown error text.
 -- 返回值：
---     string|nil：成功时返回父目录路径。
---     string|nil：失败时返回 Markdown 错误文本。
-local function validate_target_path(helpers, file_path)
-    if vulcan.fs.exists(file_path) then
-        return nil, render_error(helpers, "file_already_exists", "file already exists; use edit overwrite to replace an existing file", {
+--     string|nil：成功时返回 nil，否则返回 Markdown 错误文本。
+local function validate_delete_target(helpers, file_path)
+    if not vulcan.fs.exists(file_path) then
+        return render_error(helpers, "file_not_found", "file does not exist", {
             file = file_path,
         })
     end
-    local parent_dir = helpers.extract_parent_dir(file_path)
-    if not parent_dir or parent_dir == "" then
-        return nil, render_error(helpers, "invalid_file", "file must include a valid parent directory", {
+    if vulcan.fs.is_dir(file_path) then
+        return render_error(helpers, "directory_delete_unsupported", "directory delete is not supported; delete only accepts regular files", {
             file = file_path,
         })
     end
-    if not vulcan.fs.exists(parent_dir) then
-        return nil, render_error(helpers, "parent_directory_not_found", "parent directory does not exist", {
-            file = file_path,
-            parent = parent_dir,
-        })
-    end
-    if not vulcan.fs.is_dir(parent_dir) then
-        return nil, render_error(helpers, "parent_path_not_directory", "parent path must point to a directory", {
-            file = file_path,
-            parent = parent_dir,
-        })
-    end
-    return parent_dir, nil
+    return nil
 end
 
--- Normalize one create request into final file content and span metadata reused by preview rendering.
--- 将一次创建请求规范化为最终文件内容与可复用的预览区间元数据。
+-- Build one stable changed-span descriptor for whole-file deletion previews.
+-- 为整文件删除预览构造一个稳定的变更区间描述。
 --
 -- Parameters:
---     helpers: Shared helper table.
---     request: Normalized create request.
+--     removed_lines: Number of logical lines represented in the deletion preview.
 -- 参数：
---     helpers：共享辅助表。
---     request：规范化后的创建请求。
+--     removed_lines：删除预览中表示的逻辑行数。
 --
 -- Returns:
---     string: Final created file content.
---     table: Span metadata reused by the shared preview renderer.
+--     table: Span metadata compatible with the shared preview renderer.
 -- 返回值：
---     string：最终创建出的文件内容。
---     table：供共享预览渲染器复用的区间元数据。
-local function build_created_content(helpers, request)
-    local created_content = tostring(request.content or "")
-    local created_lines = helpers.split_insert_content(created_content)
-    return created_content, {
+--     table：与共享预览渲染器兼容的区间元数据。
+local function build_delete_span(removed_lines)
+    local line_count = math.max(0, tonumber(removed_lines) or 0)
+    return {
         start_line = 1,
-        end_line = math.max(1, #created_lines),
+        end_line = math.max(1, line_count),
         original_start_line = 1,
-        original_end_line = 0,
-        inserted_line_count = #created_lines,
+        original_end_line = line_count,
+        inserted_line_count = 0,
     }
 end
 
--- Prepare one validated create operation before preview rendering or disk writes.
--- 在预览渲染或落盘写入前准备一次已校验的创建操作。
+-- Render one delete preview block, including the empty-file edge case.
+-- 渲染一个删除预览区块，并覆盖空文件边界情况。
 --
 -- Parameters:
 --     helpers: Shared helper table.
---     request: Normalized create request.
+--     inspection: Delete inspection summary from shared helpers.
+--     changed_span: Preview span metadata.
 -- 参数：
 --     helpers：共享辅助表。
---     request：规范化后的创建请求。
+--     inspection：来自共享辅助的删除检查摘要。
+--     changed_span：预览区间元数据。
+--
+-- Returns:
+--     string: Markdown preview block.
+-- 返回值：
+--     string：Markdown 预览区块文本。
+local function render_delete_preview(helpers, inspection, changed_span)
+    if (inspection.removed_lines or 0) < 1 then
+        return table.concat({
+            "## " .. PREVIEW_TITLE,
+            "",
+            "```diff",
+            "-(empty file removed)",
+            "```",
+        }, "\n")
+    end
+    return helpers.render_operation_preview("overwrite", "delete", inspection.preview_content, "", changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES)
+end
+
+-- Prepare one validated delete operation before preview rendering or disk writes.
+-- 在预览渲染或落盘删除前准备一次已校验的删除操作。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     request: Normalized delete request.
+-- 参数：
+--     helpers：共享辅助表。
+--     request：规范化后的删除请求。
 --
 -- Returns:
 --     table|nil: Prepared operation summary on success.
@@ -267,23 +270,29 @@ end
 --     table|nil：成功时返回已准备的操作摘要。
 --     string|nil：失败时返回 Markdown 错误文本。
 local function prepare_operation(helpers, request)
-    local parent_dir, target_error = validate_target_path(helpers, request.file)
+    local target_error = validate_delete_target(helpers, request.file)
     if target_error then
         return nil, target_error
     end
 
-    local created_content, changed_span = build_created_content(helpers, request)
+    local inspection, inspection_error = helpers.inspect_file_for_delete(request.file)
+    if inspection_error then
+        return nil, render_error(helpers, "file_read_failed", tostring(inspection_error), {
+            file = request.file,
+        })
+    end
+
+    local changed_span = build_delete_span(inspection.removed_lines)
     return {
         request = request,
-        parent_dir = parent_dir,
-        created_content = created_content,
+        inspection = inspection,
         changed_span = changed_span,
-        file_record = helpers.build_create_file_record(request.file, created_content),
+        file_record = helpers.build_delete_file_record(request.file, inspection.content),
     }, nil
 end
 
--- Apply all prepared create operations in request order.
--- 按请求顺序落盘执行全部已准备的创建操作。
+-- Apply all prepared delete operations in request order.
+-- 按请求顺序落盘执行全部已准备的删除操作。
 --
 -- Parameters:
 --     helpers: Shared helper table.
@@ -298,64 +307,57 @@ end
 --     string|nil：失败时返回 Markdown 错误文本，否则返回 nil。
 local function apply_operations(helpers, operations)
     for _, operation in ipairs(operations or {}) do
-        local write_error = helpers.write_file(ERROR_TITLE, PARAMETER_ERROR_CODES, operation.request.file, operation.created_content, "")
-        if write_error then
-            return write_error
+        local delete_error = helpers.delete_file(ERROR_TITLE, PARAMETER_ERROR_CODES, operation.request.file)
+        if delete_error then
+            return delete_error
         end
     end
     return nil
 end
 
--- Render the final create result while preserving a stable Markdown contract for single-file calls.
--- 在保持单文件调用稳定 Markdown 契约的前提下渲染最终创建结果。
+-- Render the final delete result while preserving a stable Markdown contract for single-file calls.
+-- 在保持单文件调用稳定 Markdown 契约的前提下渲染最终删除结果。
 --
 -- Parameters:
 --     helpers: Shared helper table.
---     operation: Prepared single-file operation.
+--     operation: Prepared single-file delete operation.
 -- 参数：
 --     helpers：共享辅助表。
---     operation：已准备的单文件操作。
+--     operation：已准备的单文件删除操作。
 --
 -- Returns:
 --     string: Markdown success payload.
 -- 返回值：
 --     string：Markdown 成功结果文本。
 local function render_single_result(helpers, operation)
-    local request = operation.request
-    local created_content = operation.created_content
-    local changed_span = operation.changed_span
-    local status = request.apply and "APPLIED" or "PREVIEW_ONLY"
-    local created_lines = select(1, helpers.split_lines_with_final_newline(created_content))
-    local line_count = #created_lines
-    local created_span = "none"
-    if line_count > 0 then
-        created_span = string.format("L1-L%d", line_count)
-    end
+    local removed_lines = tonumber(operation.inspection.removed_lines) or 0
+    local removed_span = removed_lines > 0 and string.format("L1-L%d", removed_lines) or "none"
     local lines = {
         "# " .. RESULT_TITLE,
         "",
-        "- status: `" .. status .. "`",
-        "- file: `" .. request.file .. "`",
-        "- parent: `" .. tostring(operation.parent_dir or "") .. "`",
-        "- created_lines: `" .. tostring(line_count) .. "`",
-        "- created_span: `" .. created_span .. "`",
+        "- status: `" .. (operation.request.apply and "APPLIED" or "PREVIEW_ONLY") .. "`",
+        "- file: `" .. operation.request.file .. "`",
+        "- content_type: `" .. tostring(operation.inspection.content_type or "text") .. "`",
+        "- removed_lines: `" .. tostring(removed_lines) .. "`",
+        "- removed_span: `" .. removed_span .. "`",
+        "- delete_scope: `regular_file_only`",
         "",
-        helpers.render_operation_preview("overwrite", request.content, "", created_content, changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
+        render_delete_preview(helpers, operation.inspection, operation.changed_span),
     }
     return table.concat(lines, "\n")
 end
 
--- Render a compact per-file batch section for create results.
--- 为创建结果渲染紧凑的按文件批量分节。
+-- Render a compact per-file batch section for delete results.
+-- 为删除结果渲染紧凑的按文件批量分节。
 --
 -- Parameters:
 --     helpers: Shared helper table.
---     operation: Prepared create operation.
+--     operation: Prepared delete operation.
 --     file_index: 1-based file index in the batch.
 --     total_files: Total number of files in the batch.
 -- 参数：
 --     helpers：共享辅助表。
---     operation：已准备的创建操作。
+--     operation：已准备的删除操作。
 --     file_index：批量中的 1-based 文件序号。
 --     total_files：批量中的文件总数。
 --
@@ -364,27 +366,24 @@ end
 -- 返回值：
 --     string：单个批量项的 Markdown 分节文本。
 local function render_batch_section(helpers, operation, file_index, total_files)
-    local created_lines = select(1, helpers.split_lines_with_final_newline(operation.created_content))
-    local line_count = #created_lines
-    local created_span = "none"
-    if line_count > 0 then
-        created_span = string.format("L1-L%d", line_count)
-    end
+    local removed_lines = tonumber(operation.inspection.removed_lines) or 0
+    local removed_span = removed_lines > 0 and string.format("L1-L%d", removed_lines) or "none"
     local lines = {
         "## File " .. tostring(file_index) .. "/" .. tostring(total_files),
         "",
         "- file: `" .. operation.request.file .. "`",
-        "- parent: `" .. tostring(operation.parent_dir or "") .. "`",
-        "- created_lines: `" .. tostring(line_count) .. "`",
-        "- created_span: `" .. created_span .. "`",
+        "- content_type: `" .. tostring(operation.inspection.content_type or "text") .. "`",
+        "- removed_lines: `" .. tostring(removed_lines) .. "`",
+        "- removed_span: `" .. removed_span .. "`",
+        "- delete_scope: `regular_file_only`",
         "",
-        helpers.render_operation_preview("overwrite", operation.request.content, "", operation.created_content, operation.changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
+        render_delete_preview(helpers, operation.inspection, operation.changed_span),
     }
     return table.concat(lines, "\n")
 end
 
--- Render the final batch create result with one top-level summary and per-file sections.
--- 使用一个顶层摘要和逐文件分节渲染最终批量创建结果。
+-- Render the final batch delete result with one top-level summary and per-file sections.
+-- 使用一个顶层摘要和逐文件分节渲染最终批量删除结果。
 --
 -- Parameters:
 --     helpers: Shared helper table.
@@ -406,6 +405,7 @@ local function render_batch_result(helpers, operations, apply)
         "- status: `" .. (apply and "APPLIED" or "PREVIEW_ONLY") .. "`",
         "- files: `" .. tostring(#(operations or {})) .. "`",
         "- limit: `" .. tostring(helpers.MAX_BATCH_FILES or 10) .. "`",
+        "- delete_scope: `regular_file_only`",
     }
     for index, operation in ipairs(operations or {}) do
         table.insert(lines, "")
@@ -414,8 +414,8 @@ local function render_batch_result(helpers, operations, apply)
     return table.concat(lines, "\n")
 end
 
--- Build one aggregated host `change_set` result for batch and single create calls.
--- 为批量和单文件创建调用构造一个聚合宿主 `change_set` 结果。
+-- Build one aggregated host `change_set` result for batch and single delete calls.
+-- 为批量和单文件删除调用构造一个聚合宿主 `change_set` 结果。
 --
 -- Parameters:
 --     helpers: Shared helper table.
@@ -437,12 +437,12 @@ local function build_host_result(helpers, capability, operations, apply)
     for _, operation in ipairs(operations or {}) do
         table.insert(file_records, operation.file_record)
     end
-    local summary = string.format("%s creation of %d file%s.", apply and "Applied" or "Previewed", #file_records, #file_records == 1 and "" or "s")
+    local summary = string.format("%s deletion of %d file%s.", apply and "Applied" or "Previewed", #file_records, #file_records == 1 and "" or "s")
     return helpers.build_change_set_host_result(capability, apply, summary, file_records)
 end
 
--- Run the create entry with shared helpers and optional host change_set output.
--- 使用共享辅助与可选宿主 change_set 输出执行创建入口。
+-- Run the delete entry with shared helpers and optional host change_set output.
+-- 使用共享辅助与可选宿主 change_set 输出执行删除入口。
 --
 -- Parameters:
 --     args: Raw entry argument table from LuaSkills runtime.
@@ -477,9 +477,9 @@ return function(args)
 
     local apply = requests[1] and requests[1].apply == true
     if apply then
-        local write_error = apply_operations(helpers, operations)
-        if write_error then
-            return write_error
+        local delete_error = apply_operations(helpers, operations)
+        if delete_error then
+            return delete_error
         end
     end
 

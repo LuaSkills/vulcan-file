@@ -93,20 +93,34 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.5")
+    assert_contains(skill_yaml, "version: 0.1.6")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/edit.input.schema.json")
+    assert_contains(skill_yaml, "input_schema_file: schemas/delete.input.schema.json")
 
     create_schema = read_text("schemas/create.input.schema.json")
     assert_contains(create_schema, '"content"')
     assert_contains(create_schema, '"apply"')
+    assert_contains(create_schema, '"files"')
+    assert_contains(create_schema, '"maxItems": 10')
 
     read_schema = read_text("schemas/read.input.schema.json")
     assert_contains(read_schema, '"segments"')
     assert_contains(read_schema, '"type": "array"')
     assert_contains(read_schema, '"lines_rule"')
+    assert_contains(read_schema, '"files"')
+    assert_contains(read_schema, '"maxItems": 10')
+
+    edit_schema = read_text("schemas/edit.input.schema.json")
+    assert_contains(edit_schema, '"files"')
+    assert_contains(edit_schema, '"maxItems": 10')
+
+    delete_schema = read_text("schemas/delete.input.schema.json")
+    assert_contains(delete_schema, '"files"')
+    assert_contains(delete_schema, '"maxItems": 10')
+    assert_contains(delete_schema, 'Directory paths are rejected')
 
 
 """
@@ -123,20 +137,30 @@ def test_runtime_guardrails() -> None:
     read_runtime = read_text("runtime/vulcan-file-read.lua")
     list_runtime = read_text("runtime/vulcan-file-list.lua")
     edit_runtime = read_text("runtime/vulcan-file-edit.lua")
+    delete_runtime = read_text("runtime/vulcan-file-delete.lua")
     shared_runtime = read_text("runtime/shared_file.lua")
 
     assert_contains(read_runtime, "literal word newline")
     assert_contains(read_runtime, "5,10\\\\n25,30")
     assert_contains(read_runtime, "segments and lines_rule cannot be provided together")
     assert_contains(read_runtime, "segments must be an array of {start, count} objects")
+    assert_contains(read_runtime, "conflicting_batch_arguments")
+    assert_contains(read_runtime, "BatchFileRead Files:")
     assert_contains(list_runtime, "validate_basename_pattern")
     assert_contains(list_runtime, "pattern must be a basename-only glob")
     assert_contains(edit_runtime, "line_out_of_bounds")
+    assert_contains(edit_runtime, "conflicting_batch_arguments")
     assert_contains(create_runtime, "file_already_exists")
     assert_contains(create_runtime, "parent_directory_not_found")
+    assert_contains(create_runtime, "conflicting_batch_arguments")
+    assert_contains(delete_runtime, "directory delete is not supported")
+    assert_contains(delete_runtime, "directory_delete_unsupported")
     assert_contains(shared_runtime, 'kind = "change_set"')
     assert_contains(shared_runtime, "allows_change_set")
     assert_contains(shared_runtime, "max_payload_bytes")
+    assert_contains(shared_runtime, "MAX_BATCH_FILES = 10")
+    assert_contains(shared_runtime, 'BINARY_FILE_PLACEHOLDER = "Binary file"')
+    assert_contains(shared_runtime, "build_delete_file_record")
 
 
 """
@@ -157,10 +181,12 @@ def test_documentation_guidance() -> None:
             read_text("help/read.md"),
             read_text("help/list.md"),
             read_text("help/edit.md"),
+            read_text("help/delete.md"),
         ]
     )
 
     assert_contains(docs, '"segments": [')
+    assert_contains(docs, '"files": [')
     assert_contains(docs, '{ "start": 5, "count": 10 }')
     assert_contains(docs, '"lines_rule": "5,10\\n25,30"')
     assert_contains(docs, "legacy fallback")
@@ -171,9 +197,14 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "not a full Git ignore engine")
     assert_contains(docs, "默认 200 行")
     assert_contains(docs, "vulcan-file-create")
+    assert_contains(docs, "vulcan-file-delete")
     assert_contains(docs, "file_already_exists")
     assert_contains(docs, "parent_directory_not_found")
     assert_contains(docs, "line_out_of_bounds")
+    assert_contains(docs, "directory_delete_unsupported")
+    assert_contains(docs, "Binary file")
+    assert_contains(docs, "up to 10")
+    assert_contains(docs, "最多 10")
 
 
 """
@@ -192,6 +223,7 @@ def test_help_markdown_is_english_only() -> None:
         "help/read.md",
         "help/list.md",
         "help/edit.md",
+        "help/delete.md",
     ]
     for relative_path in help_files:
         assert_no_cjk(read_text(relative_path), relative_path)

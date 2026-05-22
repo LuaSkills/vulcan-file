@@ -8,6 +8,14 @@ Provide shared helpers for vulcan-file create and edit entries.
 -- 单个类 diff 预览区块默认最多渲染的行数。
 local DEFAULT_MAX_PREVIEW_LINES = 80
 
+-- Maximum number of files accepted by one batch file operation.
+-- 单次批量文件操作允许处理的最大文件数量。
+local MAX_BATCH_FILES = 10
+
+-- Stable placeholder text returned when one deleted file should be treated as binary.
+-- 当某个被删除文件应按二进制处理时返回的稳定占位文本。
+local BINARY_FILE_PLACEHOLDER = "Binary file"
+
 -- Return whether one value is a non-empty string after trimming.
 -- 返回一个值在去除首尾空白后是否为非空字符串。
 --
@@ -321,6 +329,51 @@ local function parse_integer_argument(error_title, parameter_error_codes, value,
     return value, nil
 end
 
+-- Validate one batch `files` array shape and enforce the shared maximum file limit.
+-- 校验批量 `files` 数组形状，并执行共享的最大文件数量限制。
+--
+-- Parameters:
+--     error_title: Visible Markdown title for errors.
+--     parameter_error_codes: Set-like table of parameter error codes.
+--     files: Candidate batch file array.
+-- 参数：
+--     error_title：错误使用的可见 Markdown 标题。
+--     parameter_error_codes：参数错误码集合表。
+--     files：候选批量文件数组。
+--
+-- Returns:
+--     table|nil: Original array-style batch table on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：成功时返回原始数组形式的批量表。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function validate_batch_files_array(error_title, parameter_error_codes, files)
+    if type(files) ~= "table" then
+        return nil, render_error(error_title, parameter_error_codes, "invalid_files_argument", "files must be an array of file request objects", {
+            actual_type = type(files),
+        })
+    end
+    local count = 0
+    for index, _ in ipairs(files) do
+        count = index
+    end
+    if count == 0 then
+        if next(files) ~= nil then
+            return nil, render_error(error_title, parameter_error_codes, "invalid_files_argument", "files must be an array of file request objects", {
+                actual_type = "table",
+            })
+        end
+        return nil, render_error(error_title, parameter_error_codes, "invalid_files_argument", "files must contain at least one file request object")
+    end
+    if count > MAX_BATCH_FILES then
+        return nil, render_error(error_title, parameter_error_codes, "too_many_files", "files may contain at most 10 items", {
+            limit = tostring(MAX_BATCH_FILES),
+            actual_count = tostring(count),
+        })
+    end
+    return files, nil
+end
+
 -- Detect the newline sequence that should be preserved for generated content.
 -- 检测生成内容时应保留的换行序列。
 --
@@ -463,6 +516,81 @@ local function build_sidecar_file_path(file_path, label)
     return directory .. base_name .. "." .. tostring(label or "tmp") .. "." .. unique_suffix .. extension
 end
 
+-- Detect the current host OS name with a runtime-backed fallback.
+-- 使用运行时支持的后备逻辑检测当前宿主操作系统名称。
+--
+-- Parameters:
+--     None.
+-- 参数：
+--     无。
+--
+-- Returns:
+--     string: Lowercase host OS name such as windows, linux, or macos.
+-- 返回值：
+--     string：小写宿主操作系统名称，例如 windows、linux 或 macos。
+local function detect_host_os()
+    if vulcan and vulcan.os and type(vulcan.os.info) == "function" then
+        local ok, info = pcall(vulcan.os.info)
+        if ok and type(info) == "table" and type(info.os) == "string" and trim(info.os) ~= "" then
+            return trim(info.os):lower()
+        end
+    end
+    return package.config:sub(1, 1) == "\\" and "windows" or "unix"
+end
+
+-- Execute one host process command for filesystem operations that must preserve Unicode path fidelity.
+-- 执行一个宿主进程命令，用于必须保留 Unicode 路径精度的文件系统操作。
+--
+-- Parameters:
+--     program: Host program name.
+--     args: Array-style argument list.
+-- 参数：
+--     program：宿主程序名。
+--     args：数组形式的参数列表。
+--
+-- Returns:
+--     boolean: True on success.
+--     string|nil: Failure message when the process call fails.
+-- 返回值：
+--     boolean：成功时返回 true。
+--     string|nil：进程调用失败时返回失败信息。
+local function execute_host_process(program, args)
+    if not (vulcan and vulcan.process and type(vulcan.process.exec) == "function") then
+        return false, "vulcan.process.exec is unavailable"
+    end
+    local ok, result = pcall(vulcan.process.exec, {
+        program = tostring(program or ""),
+        args = args or {},
+        timeout_ms = 30000,
+    })
+    if not ok then
+        return false, tostring(result)
+    end
+    if type(result) ~= "table" then
+        return false, "process execution did not return a result table"
+    end
+    if result.ok == true and result.success == true and (result.code == nil or tonumber(result.code) == 0) then
+        return true, nil
+    end
+    local stderr_text = trim(result.stderr or "")
+    local error_text = trim(result.error or "")
+    local stdout_text = trim(result.stdout or "")
+    local message = stderr_text
+    if message == "" then
+        message = error_text
+    end
+    if message == "" then
+        message = stdout_text
+    end
+    if message == "" then
+        message = "process execution failed"
+    end
+    if result.timed_out == true then
+        message = message .. " (timed out)"
+    end
+    return false, message
+end
+
 -- Remove one sidecar file and ignore cleanup failures.
 -- 删除一个旁路文件并忽略清理失败。
 --
@@ -475,11 +603,29 @@ end
 --     None.
 -- 返回值：
 --     无。
+--
+-- Important:
+--     On Windows, use a host-managed delete command instead of Lua `os.remove`
+--     so Unicode file paths continue to work.
+-- 重要说明：
+--     在 Windows 上，使用宿主管理的删除命令替代 Lua `os.remove`，
+--     以确保 Unicode 文件路径仍然可用。
 local function safe_remove_file(file_path)
     if type(file_path) ~= "string" or file_path == "" then
         return
     end
     if vulcan.fs.exists(file_path) then
+        local host_os = detect_host_os()
+        if host_os == "windows" then
+            pcall(execute_host_process, "powershell", {
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "& { param($path) if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }",
+                file_path,
+            })
+            return
+        end
         pcall(os.remove, file_path)
     end
 end
@@ -500,7 +646,25 @@ end
 -- 返回值：
 --     boolean：成功时返回 true。
 --     string|nil：重命名失败时返回失败信息。
+--
+-- Important:
+--     On Windows, use a host-managed move command instead of Lua `os.rename`
+--     because the Lua standard library path layer is not reliable for Unicode file names.
+-- 重要说明：
+--     在 Windows 上，使用宿主管理的移动命令替代 Lua `os.rename`，
+--     因为 Lua 标准库的路径层对 Unicode 文件名并不可靠。
 local function rename_file(source_path, target_path)
+    local host_os = detect_host_os()
+    if host_os == "windows" then
+        return execute_host_process("powershell", {
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "& { param($src, $dst) Move-Item -LiteralPath $src -Destination $dst -Force }",
+            source_path,
+            target_path,
+        })
+    end
     local ok, renamed, message = pcall(os.rename, source_path, target_path)
     if not ok then
         return false, tostring(renamed)
@@ -576,6 +740,180 @@ local function write_file(error_title, parameter_error_codes, file_path, content
         safe_remove_file(backup_path)
     end
     return nil
+end
+
+-- Delete one file path through the host OS layer and normalize failure messages.
+-- 通过宿主操作系统层删除一个文件路径，并规范化失败信息。
+--
+-- Parameters:
+--     error_title: Visible Markdown title for errors.
+--     parameter_error_codes: Set-like table of parameter error codes.
+--     file_path: Final target file path.
+-- 参数：
+--     error_title：错误使用的可见 Markdown 标题。
+--     parameter_error_codes：参数错误码集合表。
+--     file_path：最终目标文件路径。
+--
+-- Returns:
+--     string|nil: Markdown error text on failure, otherwise nil.
+-- 返回值：
+--     string|nil：失败时返回 Markdown 错误文本，否则返回 nil。
+local function delete_file(error_title, parameter_error_codes, file_path)
+    local host_os = detect_host_os()
+    if host_os == "windows" then
+        local removed, remove_error = execute_host_process("powershell", {
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "& { param($path) Remove-Item -LiteralPath $path -Force }",
+            file_path,
+        })
+        if not removed then
+            return render_error(error_title, parameter_error_codes, "file_delete_failed", tostring(remove_error or "delete failed"), {
+                file = file_path,
+            })
+        end
+        return nil
+    end
+    local ok, removed, message = pcall(os.remove, file_path)
+    if not ok then
+        return render_error(error_title, parameter_error_codes, "file_delete_failed", tostring(removed), {
+            file = file_path,
+        })
+    end
+    if not removed then
+        return render_error(error_title, parameter_error_codes, "file_delete_failed", tostring(message or "delete failed"), {
+            file = file_path,
+        })
+    end
+    return nil
+end
+
+-- Read one binary sample from disk for lightweight file-type inspection.
+-- 从磁盘读取一段二进制样本，用于轻量文件类型判断。
+--
+-- Parameters:
+--     file_path: Absolute file path to inspect.
+--     byte_limit: Maximum number of bytes to read.
+-- 参数：
+--     file_path：需要检查的绝对文件路径。
+--     byte_limit：最多读取的字节数。
+--
+-- Returns:
+--     string|nil: Binary sample text on success.
+--     string|nil: Open or read error text on failure.
+-- 返回值：
+--     string|nil：成功时返回二进制样本文本。
+--     string|nil：失败时返回打开或读取错误文本。
+local function read_binary_sample(file_path, byte_limit)
+    local handle, open_error = io.open(file_path, "rb")
+    if not handle then
+        return nil, tostring(open_error or "failed to open file")
+    end
+    local ok, data_or_error = pcall(function()
+        return handle:read(tonumber(byte_limit) or 4096)
+    end)
+    handle:close()
+    if not ok then
+        return nil, tostring(data_or_error)
+    end
+    return tostring(data_or_error or ""), nil
+end
+
+-- Decide whether one sampled byte sequence should be treated as binary rather than line-oriented text.
+-- 判断一段采样字节序列是否应被视为二进制，而不是按行处理的文本。
+--
+-- Parameters:
+--     sample: Raw byte sample text.
+-- 参数：
+--     sample：原始字节样本文本。
+--
+-- Returns:
+--     boolean: True when the sample looks binary.
+-- 返回值：
+--     boolean：样本看起来像二进制时返回 true。
+local function sample_looks_binary(sample)
+    local text = tostring(sample or "")
+    if text == "" then
+        return false
+    end
+    if text:find("\0", 1, true) ~= nil then
+        return true
+    end
+    local suspicious = 0
+    for index = 1, #text do
+        local byte = text:byte(index)
+        local looks_textual = byte == 9 or byte == 10 or byte == 13 or (byte >= 32 and byte <= 126) or byte >= 128
+        if not looks_textual then
+            suspicious = suspicious + 1
+        end
+    end
+    return suspicious / #text > 0.30
+end
+
+-- Inspect one file before deletion and summarize whether it should be treated as text or binary.
+-- 在删除前检查一个文件，并汇总它应按文本还是二进制处理。
+--
+-- Parameters:
+--     file_path: Absolute file path to inspect.
+-- 参数：
+--     file_path：需要检查的绝对文件路径。
+--
+-- Returns:
+--     table|nil: Inspection summary with content_type, content, removed_lines, and preview_content.
+--     string|nil: Error text on failure.
+-- 返回值：
+--     table|nil：包含 content_type、content、removed_lines 与 preview_content 的检查摘要。
+--     string|nil：失败时返回错误文本。
+local function inspect_file_for_delete(file_path)
+    if detect_host_os() == "windows" then
+        local ok, content_or_error = pcall(vulcan.fs.read, file_path)
+        if not ok or type(content_or_error) ~= "string" then
+            return {
+                content_type = "binary",
+                content = BINARY_FILE_PLACEHOLDER,
+                removed_lines = 1,
+                preview_content = BINARY_FILE_PLACEHOLDER,
+            }, nil
+        end
+        local content = tostring(content_or_error or "")
+        local lines = select(1, split_lines_with_final_newline(content))
+        return {
+            content_type = "text",
+            content = content,
+            removed_lines = #lines,
+            preview_content = content,
+        }, nil
+    end
+    local sample, sample_error = read_binary_sample(file_path, 4096)
+    if sample_error then
+        return nil, sample_error
+    end
+    if sample_looks_binary(sample) then
+        return {
+            content_type = "binary",
+            content = BINARY_FILE_PLACEHOLDER,
+            removed_lines = 1,
+            preview_content = BINARY_FILE_PLACEHOLDER,
+        }, nil
+    end
+    local ok, content_or_error = pcall(vulcan.fs.read, file_path)
+    if not ok or type(content_or_error) ~= "string" then
+        return {
+            content_type = "binary",
+            content = BINARY_FILE_PLACEHOLDER,
+            removed_lines = 1,
+            preview_content = BINARY_FILE_PLACEHOLDER,
+        }, nil
+    end
+    local content = tostring(content_or_error or "")
+    local lines = select(1, split_lines_with_final_newline(content))
+    return {
+        content_type = "text",
+        content = content,
+        removed_lines = #lines,
+        preview_content = content,
+    }, nil
 end
 
 -- Append one preview line while respecting the preview line budget.
@@ -865,6 +1203,28 @@ local function build_create_file_record(file_path, content)
     }
 end
 
+-- Build one canonical delete file record for a host `change_set` result.
+-- 为宿主 `change_set` 结果构造一个 canonical 的 delete 文件记录。
+--
+-- Parameters:
+--     file_path: Absolute target file path.
+--     content: Deleted file content or one stable binary placeholder.
+-- 参数：
+--     file_path：绝对目标文件路径。
+--     content：被删除文件内容，或稳定的二进制占位文本。
+--
+-- Returns:
+--     table: Canonical `change_set.files[]` delete record.
+-- 返回值：
+--     table：canonical `change_set.files[]` delete 记录。
+local function build_delete_file_record(file_path, content)
+    return {
+        change = "delete",
+        path = tostring(file_path or ""),
+        content = tostring(content or ""),
+    }
+end
+
 -- Resolve one normalized snapshot of the current host structured-result capability.
 -- 解析当前宿主结构化结果能力的标准化快照。
 --
@@ -950,6 +1310,42 @@ local function finalize_change_set_host_result(capability, payload)
     }
 end
 
+-- Build one aggregated host `change_set` result from multiple file records.
+-- 根据多个文件记录构造一个聚合宿主 `change_set` 结果。
+--
+-- Parameters:
+--     capability: Capability snapshot from resolve_host_result_capability.
+--     apply: Whether the operation has been written to disk.
+--     summary: Human-readable summary string.
+--     file_records: Array-style canonical file record list.
+-- 参数：
+--     capability：来自 resolve_host_result_capability 的能力快照。
+--     apply：操作是否已经落盘。
+--     summary：人类可读摘要字符串。
+--     file_records：数组形式的 canonical 文件记录列表。
+--
+-- Returns:
+--     table|nil: Host result wrapper when accepted, otherwise nil.
+-- 返回值：
+--     table|nil：被接受时返回宿主结果包装对象，否则返回 nil。
+local function build_change_set_host_result(capability, apply, summary, file_records)
+    local files = {}
+    for _, record in ipairs(file_records or {}) do
+        if type(record) == "table" then
+            table.insert(files, record)
+        end
+    end
+    if #files == 0 then
+        return nil
+    end
+    local payload = {
+        mode = apply and "applied" or "preview",
+        summary = tostring(summary or ""),
+        files = files,
+    }
+    return finalize_change_set_host_result(capability, payload)
+end
+
 -- Build one host `change_set` wrapper for a single-file create operation.
 -- 为单文件创建操作构造一个宿主 `change_set` 包装结果。
 --
@@ -969,14 +1365,9 @@ end
 -- 返回值：
 --     table|nil：被接受时返回宿主结果包装对象，否则返回 nil。
 local function build_create_host_result(capability, file_path, content, apply)
-    local payload = {
-        mode = apply and "applied" or "preview",
-        summary = (apply and "Applied" or "Previewed") .. " creation of 1 file.",
-        files = {
-            build_create_file_record(file_path, content),
-        },
-    }
-    return finalize_change_set_host_result(capability, payload)
+    return build_change_set_host_result(capability, apply, (apply and "Applied" or "Previewed") .. " creation of 1 file.", {
+        build_create_file_record(file_path, content),
+    })
 end
 
 -- Build one host `change_set` wrapper for a single-file edit operation.
@@ -1013,18 +1404,15 @@ local function build_edit_host_result(capability, file_path, original_content, e
     if type(file_record) ~= "table" then
         return nil
     end
-    local payload = {
-        mode = apply and "applied" or "preview",
-        summary = (apply and "Applied" or "Previewed") .. " 1 file edit.",
-        files = {
-            file_record,
-        },
-    }
-    return finalize_change_set_host_result(capability, payload)
+    return build_change_set_host_result(capability, apply, (apply and "Applied" or "Previewed") .. " 1 file edit.", {
+        file_record,
+    })
 end
 
 return {
     DEFAULT_MAX_PREVIEW_LINES = DEFAULT_MAX_PREVIEW_LINES,
+    MAX_BATCH_FILES = MAX_BATCH_FILES,
+    BINARY_FILE_PLACEHOLDER = BINARY_FILE_PLACEHOLDER,
     trim = trim,
     has_trimmed_text = has_trimmed_text,
     starts_with = starts_with,
@@ -1037,6 +1425,7 @@ return {
     expand_environment_path = expand_environment_path,
     validate_optional_boolean = validate_optional_boolean,
     parse_integer_argument = parse_integer_argument,
+    validate_batch_files_array = validate_batch_files_array,
     detect_newline_sequence = detect_newline_sequence,
     normalize_newlines = normalize_newlines,
     split_lines_with_final_newline = split_lines_with_final_newline,
@@ -1046,11 +1435,15 @@ return {
     safe_remove_file = safe_remove_file,
     rename_file = rename_file,
     write_file = write_file,
+    delete_file = delete_file,
+    inspect_file_for_delete = inspect_file_for_delete,
     render_operation_preview = render_operation_preview,
     build_modify_file_record = build_modify_file_record,
     build_create_file_record = build_create_file_record,
+    build_delete_file_record = build_delete_file_record,
     resolve_host_result_capability = resolve_host_result_capability,
     finalize_change_set_host_result = finalize_change_set_host_result,
+    build_change_set_host_result = build_change_set_host_result,
     build_create_host_result = build_create_host_result,
     build_edit_host_result = build_edit_host_result,
 }

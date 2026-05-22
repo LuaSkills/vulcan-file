@@ -1,14 +1,15 @@
 # `vulcan-file-edit`
 
-Use this tool when the target file and target lines are already confirmed and you need one small text edit.
+Use this tool when the target file and target lines are already confirmed and you need one small text edit or a small batch of coordinated text edits.
 
 Good fits:
 
 - You already inspected the target context with `vulcan-file-read`.
 - You only need to overwrite, append, replace one line range, or insert before or after one existing line.
 - You want a preview before deciding whether to write.
-- The host should receive one structured `change_set` edit record when supported.
+- The host should receive structured `change_set` edit records when supported.
 - The `file` path may use `${env:NAME}` placeholders.
+- Batch mode should edit at most 10 files in one call.
 
 Not a good fit:
 
@@ -25,14 +26,18 @@ Supported modes:
 - `insert_before`: insert before one existing line.
 - `insert_after`: insert after one existing line.
 
-`apply=false` by default, so the tool returns only a preview diff. The file is written only when `apply=true` is passed explicitly.
+Parameter choices:
 
-`append`, `insert_before`, and `insert_after` require non-empty `content` so no-op edits are not misreported as completed work.
+- Single-file mode: send root-level `file`, `mode`, `content`, and any mode-specific line arguments.
+- Batch mode: send `files` as an array of edit objects. Each item can carry its own `mode`, `content`, `start_line`, `end_line`, or `line`.
+- Batch mode accepts at most 10 items.
+- `apply=false` by default, so the tool returns only a preview diff. The files are written only when `apply=true` is passed explicitly, and in batch mode that one flag applies to every item.
 
 Boundary behavior:
 
 - Only `overwrite` still supports creating a missing file for backward compatibility; other modes return `file_not_found` when the file does not exist.
+- `append`, `insert_before`, and `insert_after` require non-empty `content` so no-op edits are not misreported as completed work.
 - `insert_before` and `insert_after` require `1 <= line <= total_lines`.
 - Empty files have no anchor lines, so insert modes return `line_out_of_bounds`; use `overwrite` to create content or `append` for file-end additions.
 - `insert_after` allows `line == total_lines`, which means insert after the last existing line; values beyond the total line count still return `line_out_of_bounds` and never append silently.
-- The preview shows at most 80 lines of changed context; larger previews are marked with `preview truncated`.
+- The preview shows at most 80 lines of changed context per file; larger previews are marked with `preview truncated`.

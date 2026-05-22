@@ -20,6 +20,7 @@ The current LuaSkills naming model uses the canonical `skill_id-entry_name` form
 - `vulcan-file-read`
 - `vulcan-file-create`
 - `vulcan-file-edit`
+- `vulcan-file-delete`
 
 Some MCP clients or host bindings may expose the same tools with underscores, such as `vulcan_file_read`. That is only a naming difference at the exposure layer; the semantics still map to the same File entries.
 
@@ -28,11 +29,12 @@ It is closer to a small text-file workbench built for agents and automated engin
 - First shrink the candidate set with a low-token file map.
 - Then read raw text with explicit line numbers when the file already exists.
 - Then preview new files with `create` or small changes with `edit`.
-- Finally write only when the preview matches the intended change.
+- Then preview regular-file removals with `delete` when lifecycle cleanup is needed.
+- Finally apply only when the preview matches the intended change.
 
 In one sentence:
 
-**Find the file, read the evidence, preview the create or edit step, then write.**
+**Find the file, read the evidence, preview the create, edit, or delete step, then apply.**
 
 ## What Problem It Solves
 
@@ -110,6 +112,8 @@ Ignore handling is not a full Git ignore engine; complex escapes and some advanc
 
 Use this after the file path and approximate line area are already known.
 
+It supports one root-level file request or a `files` batch of up to 10 items. In batch mode, root `numbered` acts as the default for every item unless an item overrides it.
+
 Prefer the structured `segments` array when the client supports full JSON Schema:
 
 ```json
@@ -151,6 +155,7 @@ The result includes:
 - Displayed line ranges
 - Segment count
 - Whether the request was clipped at EOF
+- Batch separators when multiple file requests are executed in one call
 
 By default, it keeps stable prefixes such as `L12:` so later review comments, citations, or `vulcan-file-edit` calls can refer to exact lines. Set `numbered=false` when plain raw text lines are more useful; the metadata header and multi-segment separators still remain.
 
@@ -163,6 +168,7 @@ Boundary behavior is explicit:
 - Omitting `lines_rule` reads the beginning of the file using the host `file_read` budget, with a 200-line fallback when the host provides no budget.
 - A literal `"newline"` token in `lines_rule` returns `invalid_lines_rule`; use `\n` in the JSON string instead.
 - Sending both `segments` and `lines_rule` returns `conflicting_range_arguments`.
+- Sending both root-level single-file arguments and `files` returns `conflicting_batch_arguments`.
 - Directory paths are only for a quick direct-child name listing; recursive discovery belongs in `vulcan-file-list`.
 - Path values may include `${env:NAME}` placeholders, which are expanded with Lua `os.getenv` before filesystem access.
 
@@ -170,7 +176,7 @@ This is not a tool for guessing through pages. If the text location is unknown, 
 
 ### `vulcan-file-create`
 
-Use this when you need to create one brand-new file and want preview-first behavior instead of writing immediately.
+Use this when you need to create one brand-new file or a small batch of brand-new files and want preview-first behavior instead of writing immediately.
 
 Typical fits:
 
@@ -183,6 +189,7 @@ Typical parameters:
 
 - `file`: exact target file path; `${env:NAME}` placeholders are supported and relative paths are resolved against the runtime cwd.
 - `content`: complete content of the new file; `""` is allowed and creates an empty file.
+- `files`: optional batch form with up to 10 `{ file, content }` objects; do not send it together with root `file`/`content`.
 - `apply`: leave false for preview, set true only when the preview is correct.
 
 Boundary behavior is explicit:
@@ -191,10 +198,13 @@ Boundary behavior is explicit:
 - Missing parent directories return `parent_directory_not_found`.
 - Parent paths that exist but are not directories return `parent_path_not_directory`.
 - Preview output shows the creation as a plus-only diff block and is truncated after 80 preview lines.
+- Batch mode accepts at most 10 items, and one `apply` flag controls the whole batch.
 
 ### `vulcan-file-edit`
 
 Use this for small text edits after the target file and target lines have been confirmed.
+
+It supports one root-level edit request or a `files` batch of up to 10 items. Batch mode is useful when several known files need coordinated preview-first text changes in one call.
 
 It previews by default and does not write. A write only happens when `apply=true` is passed explicitly.
 
@@ -207,6 +217,7 @@ Supported modes:
 - `replace_range`: replace an existing 1-based closed line range; `content=""` deletes that range.
 - `insert_before`: insert before an existing 1-based anchor line.
 - `insert_after`: insert after an existing 1-based anchor line.
+- `files`: optional batch form with up to 10 per-file edit objects; do not send it together with root single-file edit arguments.
 
 `insert_before` and `insert_after` require `1 <= line <= total_lines`. Out-of-range anchors return `line_out_of_bounds`; they do not silently append. For empty files, use `overwrite` to create content or `append` for file-end additions.
 
@@ -222,6 +233,23 @@ The result includes:
 
 It deliberately avoids complex structural reasoning. Use `vulcan-codekit-patch` for whole-function or whole-method replacement. Use CodeKit first when source structure must be understood before editing.
 
+### `vulcan-file-delete`
+
+Use this when you need to preview and remove one regular file or a small batch of regular files, and the host should receive canonical delete metadata when supported.
+
+Typical parameters:
+
+- `file`: exact regular-file path to remove; `${env:NAME}` placeholders are supported.
+- `files`: optional batch form with up to 10 `{ file }` objects; do not send it together with root `file`.
+- `apply`: leave false for preview, set true only when the preview is correct.
+
+Boundary behavior is explicit:
+
+- Missing targets return `file_not_found`.
+- Directory removal is not supported; directory paths return `directory_delete_unsupported`.
+- Text-like files return line-oriented delete previews and host delete content.
+- Binary or non-text files use the stable placeholder `Binary file` and report one removed line for preview purposes.
+
 ## A Better File Workflow For Agents
 
 In `Vulcan File`, the recommended path is usually not:
@@ -235,8 +263,8 @@ Instead:
 
 1. Use `list` to get a candidate file map.
 2. Use `read` to inspect exact target lines when the file already exists.
-3. Use `create` to preview brand-new files, or `edit` to preview small changes to existing files.
-4. Use `create apply=true` or `edit apply=true` only after the preview is correct.
+3. Use `create` to preview brand-new files, `edit` to preview small changes to existing files, or `delete` to preview regular-file removal.
+4. Use `create apply=true`, `edit apply=true`, or `delete apply=true` only after the preview is correct.
 
 In other words:
 

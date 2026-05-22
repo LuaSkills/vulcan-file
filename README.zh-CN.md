@@ -18,6 +18,7 @@
 - `vulcan-file-read`
 - `vulcan-file-create`
 - `vulcan-file-edit`
+- `vulcan-file-delete`
 
 在部分 MCP 客户端或宿主绑定里，工具名可能会被转写成下划线形式，例如 `vulcan_file_read`。这只是暴露层命名差异，语义上仍对应同一组 File 入口。
 
@@ -26,11 +27,12 @@
 - 先用低 token 文件地图缩小候选范围
 - 文件已存在时，再用明确行号读取原文
 - 再基于已确认上下文预览创建或编辑
-- 最后只在预览符合预期时写入
+- 在需要清理文件生命周期时，再用 `delete` 预览普通文件删除
+- 最后只在预览符合预期时执行
 
 一句话：
 
-**先定位文件，再读取证据；先看创建或编辑预览，再落盘写入。**
+**先定位文件，再读取证据；先看创建、编辑或删除预览，再显式执行。**
 
 ## 这东西到底解决什么问题
 
@@ -108,6 +110,8 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 当文件路径和大致行号已经明确后，用它读取精确原文。
 
+它支持一个根级单文件请求，也支持最多 10 个条目的 `files` 批量读取。批量模式下，根级 `numbered` 会作为所有条目的默认值，除非某个条目单独覆盖。
+
 如果客户端支持完整 JSON Schema，优先使用结构化 `segments` 数组：
 
 ```json
@@ -149,6 +153,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - 当前展示范围
 - 片段数量
 - 是否因为超过文件尾部而截断
+- 多文件批量读取时的分隔区块
 
 默认会保留 `L12:` 这类稳定行号前缀，便于后续 review、引用或调用 `vulcan-file-edit`。如果只需要无行号前缀的正文行，可以把 `numbered` 设为 `false`；文件头和多段分隔线仍会保留。
 
@@ -161,6 +166,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - 不传 `lines_rule` 时读取文件开头，行数来自宿主 `file_read` 预算；宿主未提供预算时默认 200 行
 - `lines_rule` 中出现字面字符串 `"newline"` 会返回 `invalid_lines_rule`，需要改为 JSON 字符串中的 `\n`
 - 同时传 `segments` 与 `lines_rule` 会返回 `conflicting_range_arguments`
+- 同时传根级单文件参数和 `files` 会返回 `conflicting_batch_arguments`
 - 目录路径只用于快速查看直接子项名称，递归找文件应使用 `vulcan-file-list`
 - 路径值可以包含 `${env:NAME}` 占位符，工具会在访问文件系统前用 Lua `os.getenv` 展开
 
@@ -168,7 +174,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 ### `vulcan-file-create`
 
-当你需要创建一个原本不存在的文件，并且希望先看预览再决定是否写入时，使用这个工具。
+当你需要创建一个原本不存在的文件，或者一小批全新文件，并且希望先看预览再决定是否写入时，使用这个工具。
 
 适合场景：
 
@@ -181,6 +187,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 - `file`：精确目标文件路径；支持 `${env:NAME}` 占位符，且相对路径会基于运行时 cwd 解析
 - `content`：新文件的完整内容；`""` 合法，可创建空文件
+- `files`：可选批量形式，最多 10 个 `{ file, content }` 对象；不能和根级 `file` / `content` 同时传
 - `apply`：默认保持 `false` 只预览，确认无误后再设为 `true`
 
 边界行为：
@@ -189,10 +196,13 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - 父目录不存在时返回 `parent_directory_not_found`
 - 父路径存在但不是目录时返回 `parent_path_not_directory`
 - 预览会以仅包含新增行的 diff 形式展示，最多展示 80 行
+- 批量模式最多接受 10 个条目，且整批共用一个 `apply` 标记
 
 ### `vulcan-file-edit`
 
 当目标文件和目标行已经确认后，用它做小范围文本编辑。
+
+它支持一个根级单文件编辑请求，也支持最多 10 个条目的 `files` 批量编辑。批量模式适合在已确认上下文后，对多个已知文件做协同的小范围文本修改。
 
 它默认只预览，不写入。只有显式传入 `apply=true` 时才会落盘。
 
@@ -205,6 +215,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - `replace_range`：替换指定既有 1-based 闭区间行范围；`content=""` 表示删除这段行
 - `insert_before`：插入到指定既有 1-based 锚点行之前
 - `insert_after`：插入到指定既有 1-based 锚点行之后
+- `files`：可选批量形式，最多 10 个逐文件编辑对象；不能和根级单文件编辑参数同时传
 
 `insert_before` 与 `insert_after` 要求 `1 <= line <= 文件总行数`。越界会返回 `line_out_of_bounds`，不会自动追加到文件末尾。空文件没有可锚定行，需要创建内容时使用 `overwrite`，需要文件尾新增时使用 `append`。
 
@@ -220,6 +231,23 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 它刻意不做复杂结构判断。如果目标是完整函数或方法替换，应使用 `vulcan-codekit-patch`；如果需要先理解源码结构，应先使用 CodeKit。
 
+### `vulcan-file-delete`
+
+当你需要预览并删除一个普通文件，或者一小批普通文件，并且希望宿主在支持时收到 canonical 删除元数据时，使用这个工具。
+
+典型参数：
+
+- `file`：要删除的精确普通文件路径；支持 `${env:NAME}` 占位符
+- `files`：可选批量形式，最多 10 个 `{ file }` 对象；不能和根级 `file` 同时传
+- `apply`：默认保持 `false` 只预览，确认无误后再设为 `true`
+
+边界行为：
+
+- 目标不存在时返回 `file_not_found`
+- 不支持目录删除；目录路径会返回 `directory_delete_unsupported`
+- 文本类文件会返回按行删除预览和宿主删除内容
+- 二进制或非文本文件不会伪造真实行内容，而是使用稳定占位符 `Binary file`，并在预览层按 1 行删除处理
+
 ## 一套更适合 Agent 的文件工作流
 
 在 `Vulcan File` 里，推荐路径通常不是：
@@ -233,8 +261,8 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 1. `list` 获取候选文件地图
 2. 文件已存在时，用 `read` 精确读取目标行段
-3. 新文件用 `create` 预览，小改动用 `edit` 预览
-4. 预览正确后再执行 `create apply=true` 或 `edit apply=true`
+3. 新文件用 `create` 预览，小改动用 `edit` 预览，普通文件移除用 `delete` 预览
+4. 预览正确后再执行 `create apply=true`、`edit apply=true` 或 `delete apply=true`
 
 也就是：
 
