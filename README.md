@@ -36,6 +36,11 @@ In one sentence:
 
 **Find the file, read the evidence, preview the create, edit, or delete step, then apply.**
 
+Path convention:
+
+- Root-level `PWD` is the shared project or workspace root for relative `file` or `path` arguments.
+- When `PWD` is omitted, empty, or not an existing directory, File does not fall back to the runtime cwd; pass absolute paths instead.
+
 ## What Problem It Solves
 
 Traditional tools can absolutely do these jobs:
@@ -99,6 +104,7 @@ Good fits:
 Typical parameters:
 
 - `path`: scan root; pass the narrowest plausible directory. Path values may include `${env:NAME}` placeholders.
+- `PWD`: optional shared project or workspace root. Relative `path` values are resolved from `PWD` when it points to an existing directory; otherwise `path` must already be absolute. If `path` is omitted, the scan starts from `PWD`.
 - `pattern`: basename-only filename glob, such as `*.lua`, `*.md`, or `Cargo.*`; use `path` instead of `src/*.lua` or `**/*.md` when narrowing directories.
 - `recursive`: recursive by default; set to `false` for direct children only.
 - `noignore`: set to `true` only when ignored or generated files are intentionally needed; this disables both ignore files and built-in high-noise directory skips.
@@ -118,6 +124,7 @@ Prefer the structured `segments` array when the client supports full JSON Schema
 
 ```json
 {
+  "PWD": "/workspace/project",
   "file": "src/example.lua",
   "segments": [
     { "start": 5, "count": 10 },
@@ -139,6 +146,7 @@ In JSON arguments, separate multiple segments with `\n` inside the string:
 
 ```json
 {
+  "PWD": "/workspace/project",
   "file": "src/example.lua",
   "lines_rule": "5,10\n25,30"
 }
@@ -187,7 +195,8 @@ Typical fits:
 
 Typical parameters:
 
-- `file`: exact target file path; `${env:NAME}` placeholders are supported and relative paths are resolved against the runtime cwd.
+- `PWD`: optional shared project or workspace root. Relative `file` values are resolved from `PWD` when it points to an existing directory; otherwise `file` must already be absolute.
+- `file`: exact target file path; `${env:NAME}` placeholders are supported.
 - `content`: complete content of the new file; `""` is allowed and creates an empty file.
 - `files`: optional batch form with up to 10 `{ file, content }` objects; do not send it together with root `file`/`content`.
 - `apply`: leave false for preview, set true only when the preview is correct.
@@ -208,7 +217,7 @@ It supports one root-level edit request or a `files` batch of up to 10 items. Ba
 
 It previews by default and does not write. A write only happens when `apply=true` is passed explicitly.
 
-The `file` path may include `${env:NAME}` placeholders, which are expanded with Lua `os.getenv` before filesystem access.
+The root `PWD` parameter may point to the current project or workspace root. When `PWD` is valid, relative `file` values resolve from it; otherwise `file` must already be absolute. `${env:NAME}` placeholders are still expanded with Lua `os.getenv` before filesystem access.
 
 Supported modes:
 
@@ -240,6 +249,7 @@ Use this when you need to preview and remove one regular file or a small batch o
 Typical parameters:
 
 - `file`: exact regular-file path to remove; `${env:NAME}` placeholders are supported.
+- `PWD`: optional shared project or workspace root. Relative `file` values are resolved from `PWD` when it points to an existing directory; otherwise `file` must already be absolute.
 - `files`: optional batch form with up to 10 `{ file }` objects; do not send it together with root `file`.
 - `apply`: leave false for preview, set true only when the preview is correct.
 

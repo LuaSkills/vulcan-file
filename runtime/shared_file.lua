@@ -114,6 +114,116 @@ local function join_path(left, right)
     return tostring(left or "") .. separator .. tostring(right or "")
 end
 
+-- Translate Windows device-path spellings such as `\\?\C:\x` or `//?C:/x` into normal absolute paths.
+-- 将 `\\?\C:\x` 或 `//?C:/x` 这类 Windows 设备路径写法转译为普通绝对路径。
+--
+-- Parameters:
+--     path: Raw caller path text.
+-- 参数：
+--     path：调用方传入的原始路径文本。
+--
+-- Returns:
+--     string: Path text translated into a regular host path form when needed.
+-- 返回值：
+--     string：在需要时转译为普通宿主路径形式后的路径文本。
+local function translate_windows_device_path(path)
+    local text = tostring(path or "")
+    local unc_remainder = text:match("^[\\\\/][\\\\/]%?[\\\\/][Uu][Nn][Cc][\\\\/](.+)$")
+    if unc_remainder then
+        return "//" .. unc_remainder
+    end
+
+    local drive_remainder = text:match("^[\\\\/][\\\\/]%?[\\\\/]([A-Za-z]:.*)$")
+    if drive_remainder then
+        return drive_remainder
+    end
+
+    local shorthand_drive_remainder = text:match("^[\\\\/][\\\\/]%?([A-Za-z]:.*)$")
+    if shorthand_drive_remainder then
+        return shorthand_drive_remainder
+    end
+
+    return text
+end
+
+-- Normalize one caller path text before absolute-path checks or filesystem validation.
+-- 在绝对路径检查或文件系统校验前规范化调用方路径文本。
+--
+-- Parameters:
+--     path: Raw caller path text.
+-- 参数：
+--     path：调用方传入的原始路径文本。
+--
+-- Returns:
+--     string: Trimmed path text with supported Windows device prefixes translated.
+-- 返回值：
+--     string：已去除首尾空白并转译受支持 Windows 设备前缀后的路径文本。
+local function normalize_path_text(path)
+    return translate_windows_device_path(trim(path))
+end
+
+-- Return whether one path text is exactly a Windows drive root.
+-- 返回一个路径文本是否恰好是 Windows 盘符根目录。
+--
+-- Parameters:
+--     path: Path text to inspect.
+-- 参数：
+--     path：需要检查的路径文本。
+--
+-- Returns:
+--     boolean: True when the path is a drive root such as `C:\` or `D:/`.
+-- 返回值：
+--     boolean：当路径是 `C:\` 或 `D:/` 这类盘符根目录时返回 true。
+local function is_windows_drive_root_path(path)
+    return normalize_path_text(path):match("^[A-Za-z]:[\\\\/]?$") ~= nil
+end
+
+-- Return whether one path text is exactly a UNC share root.
+-- 返回一个路径文本是否恰好是 UNC 共享根目录。
+--
+-- Parameters:
+--     path: Path text to inspect.
+-- 参数：
+--     path：需要检查的路径文本。
+--
+-- Returns:
+--     boolean: True when the path is a UNC root such as `//server/share`.
+-- 返回值：
+--     boolean：当路径是 `//server/share` 这类 UNC 根目录时返回 true。
+local function is_unc_root_path(path)
+    local normalized = normalize_path_text(path):gsub("\\", "/")
+    normalized = normalized:gsub("/+$", "")
+    return normalized:match("^//[^/]+/[^/]+$") ~= nil
+end
+
+-- Remove trailing path separators while preserving filesystem roots that need them.
+-- 移除路径末尾分隔符，同时保留必须保留分隔符的文件系统根路径。
+--
+-- Parameters:
+--     path: Path text that may contain trailing separators.
+-- 参数：
+--     path：可能带有尾部分隔符的路径文本。
+--
+-- Returns:
+--     string: Path text without redundant trailing separators.
+-- 返回值：
+--     string：去除冗余尾部分隔符后的路径文本。
+local function trim_trailing_path_separators(path)
+    local normalized = normalize_path_text(path)
+    if normalized == "/" or normalized == "\\" then
+        return normalized
+    end
+    if is_windows_drive_root_path(normalized) or is_unc_root_path(normalized) then
+        return normalized
+    end
+
+    local trimmed_path = normalized:gsub("[\\\\/]+$", "")
+    if trimmed_path == "" then
+        return normalized
+    end
+    return trimmed_path
+end
+
 -- Determine whether one path text is already absolute on common Windows and POSIX forms.
 -- 判断一个路径文本是否已是常见 Windows 或 POSIX 绝对路径形式。
 --
@@ -127,7 +237,7 @@ end
 -- 返回值：
 --     boolean：当路径为绝对路径时返回 true。
 local function is_absolute_path(path)
-    local text = tostring(path or "")
+    local text = normalize_path_text(path)
     if text:match("^[A-Za-z]:[\\/]") then
         return true
     end
@@ -153,7 +263,7 @@ end
 -- 返回值：
 --     string：绝对路径文本。
 local function resolve_absolute_path(path)
-    local text = tostring(path or "")
+    local text = normalize_path_text(path)
     if is_absolute_path(text) then
         return text
     end
@@ -218,27 +328,29 @@ local function render_error(error_title, parameter_error_codes, error_code, mess
     return table.concat(lines, "\n")
 end
 
--- Expand `${env:NAME}` placeholders before filesystem access and normalize the final path to absolute form.
--- 在访问文件系统前展开 `${env:NAME}` 占位符，并将最终路径规范为绝对路径。
+-- Expand `${env:NAME}` placeholders before later path resolution steps.
+-- 在后续路径解析步骤前展开 `${env:NAME}` 占位符。
 --
 -- Parameters:
 --     error_title: Visible Markdown title for errors.
 --     parameter_error_codes: Set-like table of parameter error codes.
 --     path: Caller path text to expand.
 --     field_name: Argument name used in error output.
+--     allow_empty: When true, an empty resolved string is returned instead of raising an error.
 -- 参数：
 --     error_title：错误使用的可见 Markdown 标题。
 --     parameter_error_codes：参数错误码集合表。
 --     path：需要展开的调用方路径文本。
 --     field_name：错误输出中使用的参数名。
+--     allow_empty：为 true 时，解析后为空字符串不会报错，而是直接返回空字符串。
 --
 -- Returns:
---     string|nil: Absolute expanded path on success.
+--     string|nil: Expanded path text on success.
 --     string|nil: Markdown error text on failure.
 -- 返回值：
---     string|nil：成功时返回绝对展开路径。
+--     string|nil：成功时返回展开后的路径文本。
 --     string|nil：失败时返回 Markdown 错误文本。
-local function expand_environment_path(error_title, parameter_error_codes, path, field_name)
+local function expand_environment_text(error_title, parameter_error_codes, path, field_name, allow_empty)
     local source = tostring(path or "")
     local unresolved_variable = nil
     local expanded = source:gsub("%${env:([^}]+)}", function(variable_name)
@@ -270,11 +382,148 @@ local function expand_environment_path(error_title, parameter_error_codes, path,
     end
     local resolved = trim(expanded)
     if resolved == "" then
+        if allow_empty == true then
+            return "", nil
+        end
         return nil, render_error(error_title, parameter_error_codes, "invalid_file", "file must resolve to a non-empty string", {
             field = tostring(field_name or "path"),
         })
     end
-    return resolve_absolute_path(resolved), nil
+    return resolved, nil
+end
+
+-- Resolve one optional `PWD` convention value into a validated absolute directory root.
+-- 将一个可选 `PWD` 公约参数解析为已校验的绝对目录根路径。
+--
+-- Parameters:
+--     error_title: Visible Markdown title for errors.
+--     parameter_error_codes: Set-like table of parameter error codes.
+--     pwd_value: Caller-provided `PWD` value.
+-- 参数：
+--     error_title：错误使用的可见 Markdown 标题。
+--     parameter_error_codes：参数错误码集合表。
+--     pwd_value：调用方传入的 `PWD` 值。
+--
+-- Returns:
+--     string|nil: Valid absolute directory root when `PWD` is usable, otherwise nil.
+--     string|nil: Markdown error text on malformed `PWD`.
+-- 返回值：
+--     string|nil：`PWD` 可用时返回有效绝对目录根路径，否则返回 nil。
+--     string|nil：`PWD` 结构非法时返回 Markdown 错误文本。
+local function resolve_pwd_root(error_title, parameter_error_codes, pwd_value)
+    if pwd_value == nil then
+        return nil, nil
+    end
+    if type(pwd_value) ~= "string" then
+        return nil, render_error(error_title, parameter_error_codes, "invalid_pwd_argument", "PWD must be a string when provided", {
+            field = "PWD",
+            actual_type = type(pwd_value),
+        })
+    end
+
+    local expanded_pwd, pwd_error = expand_environment_text(error_title, parameter_error_codes, pwd_value, "PWD", true)
+    if pwd_error then
+        return nil, pwd_error
+    end
+    if not has_trimmed_text(expanded_pwd) then
+        return nil, nil
+    end
+
+    local normalized_pwd = trim_trailing_path_separators(expanded_pwd)
+    if not is_absolute_path(normalized_pwd) then
+        return nil, render_error(error_title, parameter_error_codes, "invalid_pwd_argument", "PWD must be an absolute directory path when provided", {
+            field = "PWD",
+            pwd = normalized_pwd,
+        })
+    end
+    if not vulcan.fs.exists(normalized_pwd) or not vulcan.fs.is_dir(normalized_pwd) then
+        return nil, nil
+    end
+    return normalized_pwd, nil
+end
+
+-- Resolve one caller path using absolute-path rules plus the optional `PWD` root convention.
+-- 使用绝对路径规则与可选 `PWD` 根目录公约解析调用方路径。
+--
+-- Parameters:
+--     error_title: Visible Markdown title for errors.
+--     parameter_error_codes: Set-like table of parameter error codes.
+--     path: Caller path text to resolve.
+--     field_name: Argument name rendered in error output.
+--     pwd_root: Validated absolute `PWD` directory root, or nil.
+--     empty_error_code: Error code used when the resolved path becomes empty.
+--     empty_message: Human-readable message used when the resolved path becomes empty.
+-- 参数：
+--     error_title：错误使用的可见 Markdown 标题。
+--     parameter_error_codes：参数错误码集合表。
+--     path：需要解析的调用方路径文本。
+--     field_name：错误输出中使用的参数名。
+--     pwd_root：已校验的绝对 `PWD` 目录根路径，或 nil。
+--     empty_error_code：解析后路径为空时使用的错误码。
+--     empty_message：解析后路径为空时使用的可读错误信息。
+--
+-- Returns:
+--     string|nil: Absolute path resolved from the caller input.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     string|nil：从调用方输入解析出的绝对路径。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function resolve_input_path(error_title, parameter_error_codes, path, field_name, pwd_root, empty_error_code, empty_message)
+    local expanded_path, environment_error = expand_environment_text(error_title, parameter_error_codes, path, field_name)
+    if environment_error then
+        return nil, environment_error
+    end
+
+    local normalized_path = normalize_path_text(expanded_path)
+    if normalized_path == "" then
+        return nil, render_error(error_title, parameter_error_codes, tostring(empty_error_code or "invalid_file"), tostring(empty_message or "file must resolve to a non-empty string"), {
+            field = tostring(field_name or "path"),
+        })
+    end
+    if is_absolute_path(normalized_path) then
+        return normalized_path, nil
+    end
+    if has_trimmed_text(pwd_root) then
+        return join_path(pwd_root, normalized_path), nil
+    end
+    return nil, render_error(error_title, parameter_error_codes, "relative_path_requires_pwd", "relative paths require a valid PWD; otherwise pass an absolute path", {
+        field = tostring(field_name or "path"),
+        path = normalized_path,
+    })
+end
+
+-- Expand `${env:NAME}` placeholders and resolve the final path with the optional `PWD` convention root.
+-- 展开 `${env:NAME}` 占位符，并使用可选 `PWD` 公约根目录解析最终路径。
+--
+-- Parameters:
+--     error_title: Visible Markdown title for errors.
+--     parameter_error_codes: Set-like table of parameter error codes.
+--     path: Caller path text to resolve.
+--     field_name: Argument name used in error output.
+--     pwd_root: Validated absolute `PWD` directory root, or nil.
+-- 参数：
+--     error_title：错误使用的可见 Markdown 标题。
+--     parameter_error_codes：参数错误码集合表。
+--     path：需要解析的调用方路径文本。
+--     field_name：错误输出中使用的参数名。
+--     pwd_root：已校验的绝对 `PWD` 目录根路径，或 nil。
+--
+-- Returns:
+--     string|nil: Absolute resolved path on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     string|nil：成功时返回绝对解析路径。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function expand_environment_path(error_title, parameter_error_codes, path, field_name, pwd_root)
+    return resolve_input_path(
+        error_title,
+        parameter_error_codes,
+        path,
+        field_name,
+        pwd_root,
+        "invalid_file",
+        "file must resolve to a non-empty string"
+    )
 end
 
 -- Validate an optional boolean argument and report type mistakes clearly.
@@ -1537,10 +1786,16 @@ return {
     starts_with = starts_with,
     ends_with = ends_with,
     join_path = join_path,
+    translate_windows_device_path = translate_windows_device_path,
+    normalize_path_text = normalize_path_text,
+    trim_trailing_path_separators = trim_trailing_path_separators,
     is_absolute_path = is_absolute_path,
     resolve_absolute_path = resolve_absolute_path,
     extract_parent_dir = extract_parent_dir,
     render_error = render_error,
+    expand_environment_text = expand_environment_text,
+    resolve_pwd_root = resolve_pwd_root,
+    resolve_input_path = resolve_input_path,
     expand_environment_path = expand_environment_path,
     validate_optional_boolean = validate_optional_boolean,
     parse_integer_argument = parse_integer_argument,

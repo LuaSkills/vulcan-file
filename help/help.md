@@ -9,6 +9,7 @@ Prefer these choices:
 - Do not know where the target file is yet: use `vulcan-file-list` first to get one low-token file map.
 - Need one small text change or a few coordinated text changes: use `vulcan-file-edit`, preview first, then set `apply=true`.
 - Need to remove regular files and the host should receive delete metadata: use `vulcan-file-delete`, preview first, then set `apply=true`.
+- If the host or caller provides root-level `PWD`, relative `file` or `path` values resolve from that directory. Without a valid `PWD`, pass absolute paths.
 
 Batch limits:
 

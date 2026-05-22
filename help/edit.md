@@ -31,6 +31,7 @@ Parameter choices:
 - Single-file mode: send root-level `file`, `mode`, `content`, and any mode-specific line arguments.
 - Batch mode: send `files` as an array of edit objects. Each item can carry its own `mode`, `content`, `start_line`, `end_line`, or `line`.
 - Batch mode accepts at most 10 items.
+- Root-level `PWD` is optional. When it points to an existing directory, relative `file` values resolve from that root; otherwise every `file` must already be absolute.
 - `apply=false` by default, so the tool returns only a preview diff. The files are written only when `apply=true` is passed explicitly, and in batch mode that one flag applies to every item.
 
 Boundary behavior:

@@ -16,7 +16,8 @@ Not a good fit:
 
 Parameter choices:
 
-- `path`: pass the narrowest plausible directory; when omitted, the scan starts from the current directory; `${env:NAME}` placeholders are supported.
+- `PWD`: optional shared project or workspace root. When it points to an existing directory, relative `path` values resolve from that root and omitting `path` starts the scan from `PWD`.
+- `path`: pass the narrowest plausible directory; `${env:NAME}` placeholders are supported. Without a valid `PWD`, this path must already be absolute.
 - `pattern`: when the extension or filename shape is known, pass one basename-only glob such as `*.rs`, `*.lua`, or `Cargo.*`; it matches only the filename, not the relative path, so do not pass `src/*.lua` or `**/*.md`; use `path` to narrow directories.
 - `recursive`: recursive by default; set `false` when you only want direct children.
 - `noignore`: set `true` only when ignored or generated files are intentionally needed; it disables both `.gitignore` / `.ignore` file rules and built-in high-noise directory skips.

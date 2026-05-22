@@ -23,6 +23,8 @@ local PARAMETER_ERROR_CODES = {
     invalid_files_argument = true,
     too_many_files = true,
     conflicting_batch_arguments = true,
+    invalid_pwd_argument = true,
+    relative_path_requires_pwd = true,
     environment_variable_not_found = true,
     invalid_environment_variable_reference = true,
     invalid_content = true,
@@ -88,10 +90,12 @@ end
 --     helpers: Shared helper table.
 --     request: Raw single-file request table.
 --     apply: Shared apply flag inherited from the root request.
+--     pwd_root: Valid absolute `PWD` directory root shared by the whole call, or nil.
 -- 参数：
 --     helpers：共享辅助表。
 --     request：原始单文件请求表。
 --     apply：从根请求继承的统一 apply 标记。
+--     pwd_root：整个调用共享的有效绝对 `PWD` 目录根路径，或 nil。
 --
 -- Returns:
 --     table|nil: Normalized create request on success.
@@ -99,7 +103,7 @@ end
 -- 返回值：
 --     table|nil：成功时返回规范化后的创建请求。
 --     string|nil：失败时返回 Markdown 错误文本。
-local function validate_single_request(helpers, request, apply)
+local function validate_single_request(helpers, request, apply, pwd_root)
     if type(request) ~= "table" then
         return nil, render_error(helpers, "invalid_files_argument", "each files item must be an object with file and content", {
             actual_type = type(request),
@@ -112,7 +116,7 @@ local function validate_single_request(helpers, request, apply)
         return nil, render_error(helpers, "invalid_content", "content must be a string")
     end
 
-    local file_path, environment_error = helpers.expand_environment_path(ERROR_TITLE, PARAMETER_ERROR_CODES, helpers.trim(request.file), "file")
+    local file_path, environment_error = helpers.expand_environment_path(ERROR_TITLE, PARAMETER_ERROR_CODES, helpers.trim(request.file), "file", pwd_root)
     if environment_error then
         return nil, environment_error
     end
@@ -149,6 +153,11 @@ local function collect_requests(helpers, args)
         return nil, nil, apply_error
     end
 
+    local pwd_root, pwd_error = helpers.resolve_pwd_root(ERROR_TITLE, PARAMETER_ERROR_CODES, request.PWD)
+    if pwd_error then
+        return nil, nil, pwd_error
+    end
+
     if request.files ~= nil then
         if request.file ~= nil or request.content ~= nil then
             return nil, true, render_error(helpers, "conflicting_batch_arguments", "use either file/content or files, not both", {
@@ -161,7 +170,7 @@ local function collect_requests(helpers, args)
         end
         local normalized = {}
         for index, item in ipairs(files) do
-            local item_request, item_error = validate_single_request(helpers, item, request.apply == true)
+            local item_request, item_error = validate_single_request(helpers, item, request.apply == true, pwd_root)
             if item_error then
                 return nil, true, render_error(helpers, "invalid_files_argument", "one files item is invalid", {
                     file_index = tostring(index),
@@ -172,7 +181,7 @@ local function collect_requests(helpers, args)
         return normalized, true, nil
     end
 
-    local single_request, validation_error = validate_single_request(helpers, request, request.apply == true)
+    local single_request, validation_error = validate_single_request(helpers, request, request.apply == true, pwd_root)
     if validation_error then
         return nil, false, validation_error
     end

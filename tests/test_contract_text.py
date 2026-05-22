@@ -93,7 +93,7 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.7")
+    assert_contains(skill_yaml, "version: 0.1.8")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
@@ -101,23 +101,30 @@ def test_skill_manifest_contract() -> None:
     assert_contains(skill_yaml, "input_schema_file: schemas/delete.input.schema.json")
 
     create_schema = read_text("schemas/create.input.schema.json")
+    assert_contains(create_schema, '"PWD"')
     assert_contains(create_schema, '"content"')
     assert_contains(create_schema, '"apply"')
     assert_contains(create_schema, '"files"')
     assert_contains(create_schema, '"maxItems": 10')
 
     read_schema = read_text("schemas/read.input.schema.json")
+    assert_contains(read_schema, '"PWD"')
     assert_contains(read_schema, '"segments"')
     assert_contains(read_schema, '"type": "array"')
     assert_contains(read_schema, '"lines_rule"')
     assert_contains(read_schema, '"files"')
     assert_contains(read_schema, '"maxItems": 10')
 
+    list_schema = read_text("schemas/list.input.schema.json")
+    assert_contains(list_schema, '"PWD"')
+
     edit_schema = read_text("schemas/edit.input.schema.json")
+    assert_contains(edit_schema, '"PWD"')
     assert_contains(edit_schema, '"files"')
     assert_contains(edit_schema, '"maxItems": 10')
 
     delete_schema = read_text("schemas/delete.input.schema.json")
+    assert_contains(delete_schema, '"PWD"')
     assert_contains(delete_schema, '"files"')
     assert_contains(delete_schema, '"maxItems": 10')
     assert_contains(delete_schema, 'Directory paths are rejected')
@@ -148,13 +155,17 @@ def test_runtime_guardrails() -> None:
     assert_contains(read_runtime, "BatchFileRead Files:")
     assert_contains(list_runtime, "validate_basename_pattern")
     assert_contains(list_runtime, "pattern must be a basename-only glob")
+    assert_contains(list_runtime, "relative_path_requires_pwd")
     assert_contains(edit_runtime, "line_out_of_bounds")
     assert_contains(edit_runtime, "conflicting_batch_arguments")
+    assert_contains(edit_runtime, "invalid_pwd_argument")
     assert_contains(create_runtime, "file_already_exists")
     assert_contains(create_runtime, "parent_directory_not_found")
     assert_contains(create_runtime, "conflicting_batch_arguments")
+    assert_contains(create_runtime, "invalid_pwd_argument")
     assert_contains(delete_runtime, "directory delete is not supported")
     assert_contains(delete_runtime, "directory_delete_unsupported")
+    assert_contains(delete_runtime, "invalid_pwd_argument")
     assert_contains(shared_runtime, 'kind = "change_set"')
     assert_contains(shared_runtime, "allows_change_set")
     assert_contains(shared_runtime, "max_payload_bytes")
@@ -166,6 +177,10 @@ def test_runtime_guardrails() -> None:
     assert_contains(shared_runtime, 'content_mode = "truncated"')
     assert_contains(shared_runtime, 'type(vulcan.fs.rename) == "function"')
     assert_contains(shared_runtime, 'type(vulcan.fs.remove) == "function"')
+    assert_contains(shared_runtime, "translate_windows_device_path")
+    assert_contains(shared_runtime, "resolve_pwd_root")
+    assert_contains(shared_runtime, "relative_path_requires_pwd")
+    assert_contains(shared_runtime, "PWD must be an absolute directory path")
 
 
 """
@@ -215,6 +230,9 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "50")
     assert_contains(docs, "up to 10")
     assert_contains(docs, "最多 10")
+    assert_contains(docs, "PWD")
+    assert_contains(docs, "must already be absolute")
+    assert_contains(docs, "必须本身就是绝对路径")
 
 
 """

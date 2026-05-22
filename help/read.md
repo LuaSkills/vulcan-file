@@ -21,6 +21,7 @@ Parameter choices:
 - Single-file mode: send root-level `file`, plus optional `segments`, `lines_rule`, or `numbered`.
 - Batch mode: send `files` as an array of objects. Each item must include `file` and may override `segments`, `lines_rule`, or `numbered`.
 - Batch mode accepts at most 10 items.
+- Root-level `PWD` is optional. When it points to an existing directory, relative `file` values resolve from that root; otherwise every `file` must already be absolute.
 - In batch mode, root `numbered` acts as the default for all items unless an item overrides it.
 - `segments`: prefer this structured array parameter; each item uses `{ "start": start_line, "count": line_count }`; when omitted, the tool reads from the beginning of the file using the host `file_read` budget, with a 200-line fallback.
 - `lines_rule`: legacy fallback for clients that cannot send arrays; it still uses `start,count` and separates multiple rules with `\n` inside the string; do not send it together with `segments`.
@@ -29,6 +30,7 @@ Preferred structured array form:
 
 ```json
 {
+  "PWD": "/workspace/project",
   "file": "src/example.lua",
   "segments": [
     { "start": 5, "count": 10 },
@@ -41,6 +43,7 @@ Batch form:
 
 ```json
 {
+  "PWD": "/workspace/project",
   "numbered": true,
   "files": [
     {
@@ -74,6 +77,7 @@ In JSON arguments, multi-segment rules must use the escaped newline `\n` inside 
 
 ```json
 {
+  "PWD": "/workspace/project",
   "file": "src/example.lua",
   "lines_rule": "5,10\n25,30"
 }

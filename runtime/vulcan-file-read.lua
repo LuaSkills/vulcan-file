@@ -20,6 +20,10 @@ local MAX_SAFE_RULE_INTEGER = 9007199254740991
 -- MAX_SAFE_RULE_INTEGER 的文本形式，用于稳定渲染错误信息。
 local MAX_SAFE_RULE_INTEGER_TEXT = "9007199254740991"
 
+-- Visible Markdown title used for read error payloads.
+-- 读取错误结果使用的可见 Markdown 标题。
+local ERROR_TITLE = "FILE READ ERROR"
+
 -- Error codes that indicate the caller passed invalid tool arguments.
 -- 表示调用方传入无效工具参数的错误码集合。
 local PARAMETER_ERROR_CODES = {
@@ -27,6 +31,8 @@ local PARAMETER_ERROR_CODES = {
     invalid_files_argument = true,
     too_many_files = true,
     conflicting_batch_arguments = true,
+    invalid_pwd_argument = true,
+    relative_path_requires_pwd = true,
     path_not_found = true,
     environment_variable_not_found = true,
     invalid_environment_variable_reference = true,
@@ -73,12 +79,39 @@ local function resolve_line_budget()
     return DEFAULT_LIMIT_LINES
 end
 
+-- Load the shared file helper module from the current entry directory.
+-- 从当前入口目录加载共享文件辅助模块。
+--
+-- Parameters:
+--     None.
+-- 参数：
+--     无。
+--
+-- Returns:
+--     table: Shared helper table used for path and validation helpers.
+-- 返回值：
+--     table：用于路径与校验辅助的共享 helper 表。
+local function load_shared_file_helpers()
+    local entry_dir = tostring(vulcan.context.entry_dir or ".")
+    local helper_path = vulcan.path.join(entry_dir, "shared_file.lua")
+    local chunk, load_error = loadfile(helper_path)
+    if not chunk then
+        error("Failed to load shared_file.lua: " .. tostring(load_error))
+    end
+
+    local ok, helpers = pcall(chunk)
+    if not ok or type(helpers) ~= "table" then
+        error("shared_file.lua did not return a helper table: " .. tostring(helpers))
+    end
+    return helpers
+end
+
 -- Render one stable Markdown error payload for invalid input or file failures.
 -- 为无效输入或文件失败渲染稳定的 Markdown 错误结果。
 local function render_error(error_code, message, details)
     local is_parameter_error = PARAMETER_ERROR_CODES[tostring(error_code or "")] == true
     local lines = {
-        "# FILE READ ERROR",
+        "# " .. ERROR_TITLE,
         "",
         "- error: `" .. tostring(error_code or "unknown_error") .. "`",
         "- type: `" .. (is_parameter_error and "parameter_error" or "runtime_error") .. "`",
@@ -93,42 +126,36 @@ local function render_error(error_code, message, details)
     return table.concat(lines, "\n")
 end
 
--- Expand `${env:NAME}` placeholders in a caller-provided path before filesystem access.
--- 在访问文件系统之前展开调用方路径中的 `${env:NAME}` 占位符。
--- Parameters: path is the caller path text and field_name is the argument name rendered in errors; returns expanded path or Markdown error text.
--- 参数：path 为调用方路径文本，field_name 为错误中展示的参数名；返回展开后的路径或 Markdown 错误文本。
-local function expand_environment_path(path, field_name)
-    local source = tostring(path or "")
-    local unresolved_variable = nil
-    local expanded = source:gsub("%${env:([^}]+)}", function(variable_name)
-        local normalized_name = trim(variable_name)
-        if normalized_name == "" then
-            unresolved_variable = variable_name
-            return ""
-        end
-
-        local environment_value = os.getenv(normalized_name)
-        if environment_value == nil then
-            unresolved_variable = normalized_name
-            return ""
-        end
-        return environment_value
-    end)
-
-    if unresolved_variable ~= nil then
-        return nil, render_error("environment_variable_not_found", "environment variable referenced in path is not defined", {
-            field = tostring(field_name or "path"),
-            variable = tostring(unresolved_variable),
-            path = source,
-        })
-    end
-    if expanded:find("${env:", 1, true) ~= nil then
-        return nil, render_error("invalid_environment_variable_reference", "environment variable path placeholder must use ${env:NAME} syntax", {
-            field = tostring(field_name or "path"),
-            path = source,
-        })
-    end
-    return expanded, nil
+-- Resolve one caller path with `${env:NAME}` expansion plus the optional `PWD` convention root.
+-- 使用 `${env:NAME}` 展开与可选 `PWD` 公约根目录解析一个调用方路径。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     path: Caller path text.
+--     field_name: Argument name rendered in errors.
+--     pwd_root: Valid absolute `PWD` directory root, or nil.
+-- 参数：
+--     helpers：共享辅助表。
+--     path：调用方路径文本。
+--     field_name：错误中展示的参数名。
+--     pwd_root：有效绝对 `PWD` 目录根路径，或 nil。
+--
+-- Returns:
+--     string|nil: Absolute resolved path on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     string|nil：成功时返回绝对解析路径。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function expand_environment_path(helpers, path, field_name, pwd_root)
+    return helpers.resolve_input_path(
+        ERROR_TITLE,
+        PARAMETER_ERROR_CODES,
+        path,
+        field_name,
+        pwd_root,
+        "invalid_path",
+        "file must resolve to a non-empty string"
+    )
 end
 
 -- Parse a positive integer text value without accepting overflowing Lua numbers.
@@ -234,12 +261,28 @@ end
 
 -- Validate that a path points to one existing file or directory.
 -- 校验路径指向一个已存在的文件或目录。
-local function validate_target_path(value)
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     value: Caller-provided file or directory path.
+--     pwd_root: Valid absolute `PWD` directory root, or nil.
+-- 参数：
+--     helpers：共享辅助表。
+--     value：调用方传入的文件或目录路径。
+--     pwd_root：有效绝对 `PWD` 目录根路径，或 nil。
+--
+-- Returns:
+--     string|nil: Existing resolved file or directory path on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     string|nil：成功时返回已存在的解析后文件或目录路径。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function validate_target_path(helpers, value, pwd_root)
     if type(value) ~= "string" or trim(value) == "" then
         return nil, render_error("invalid_path", "file must be a non-empty string")
     end
 
-    local target_path, environment_error = expand_environment_path(trim(value), "file")
+    local target_path, environment_error = expand_environment_path(helpers, trim(value), "file", pwd_root)
     if environment_error then
         return nil, environment_error
     end
@@ -683,11 +726,15 @@ end
 -- 使用继承的 numbered 默认值规范化一次单文件读取请求。
 --
 -- Parameters:
+--     helpers: Shared helper table.
 --     request: Raw single-file read request table.
 --     default_numbered: Default line-number flag inherited from the root request.
+--     pwd_root: Valid absolute `PWD` directory root shared by the whole call, or nil.
 -- 参数：
+--     helpers：共享辅助表。
 --     request：原始单文件读取请求表。
 --     default_numbered：从根请求继承的默认行号标记。
+--     pwd_root：整个调用共享的有效绝对 `PWD` 目录根路径，或 nil。
 --
 -- Returns:
 --     table|nil: Normalized read request.
@@ -695,7 +742,7 @@ end
 -- 返回值：
 --     table|nil：规范化后的读取请求。
 --     string|nil：失败时返回 Markdown 错误文本。
-local function normalize_read_request(request, default_numbered)
+local function normalize_read_request(helpers, request, default_numbered, pwd_root)
     if type(request) ~= "table" then
         return nil, render_error("invalid_files_argument", "each files item must be an object with file and optional range settings", {
             actual_type = type(request),
@@ -707,7 +754,7 @@ local function normalize_read_request(request, default_numbered)
         return nil, numbered_error
     end
 
-    local target_path, path_error = validate_target_path(request.file)
+    local target_path, path_error = validate_target_path(helpers, request.file, pwd_root)
     if path_error then
         return nil, path_error
     end
@@ -728,8 +775,10 @@ end
 -- 从单文件或批量输入中收集一组规范化的读取请求。
 --
 -- Parameters:
+--     helpers: Shared helper table.
 --     args: Raw entry argument table from LuaSkills runtime.
 -- 参数：
+--     helpers：共享辅助表。
 --     args：LuaSkills 运行时传入的原始参数表。
 --
 -- Returns:
@@ -740,11 +789,16 @@ end
 --     table|nil：数组形式的规范化请求列表。
 --     boolean|nil：调用方使用批量 `files` 模式时返回 true。
 --     string|nil：失败时返回 Markdown 错误文本。
-local function collect_requests(args)
+local function collect_requests(helpers, args)
     local request = type(args) == "table" and args or {}
     local numbered_error = validate_boolean_argument(request.numbered, "numbered")
     if numbered_error then
         return nil, nil, numbered_error
+    end
+
+    local pwd_root, pwd_error = helpers.resolve_pwd_root(ERROR_TITLE, PARAMETER_ERROR_CODES, request.PWD)
+    if pwd_error then
+        return nil, nil, pwd_error
     end
 
     if request.files ~= nil then
@@ -760,7 +814,7 @@ local function collect_requests(args)
         local normalized = {}
         local default_numbered = request.numbered ~= false
         for index, item in ipairs(files) do
-            local item_request, item_error = normalize_read_request(item, default_numbered)
+            local item_request, item_error = normalize_read_request(helpers, item, default_numbered, pwd_root)
             if item_error then
                 return nil, true, render_error("invalid_files_argument", "one files item is invalid", {
                     file_index = tostring(index),
@@ -771,7 +825,7 @@ local function collect_requests(args)
         return normalized, true, nil
     end
 
-    local single_request, request_error = normalize_read_request(request, request.numbered ~= false)
+    local single_request, request_error = normalize_read_request(helpers, request, request.numbered ~= false, pwd_root)
     if request_error then
         return nil, false, request_error
     end
@@ -852,7 +906,8 @@ end
 -- Tool entry point invoked by the LuaSkills runtime.
 -- LuaSkills 运行时调用的工具入口。
 return function(args)
-    local requests, is_batch, request_error = collect_requests(args)
+    local helpers = load_shared_file_helpers()
+    local requests, is_batch, request_error = collect_requests(helpers, args)
     if request_error then
         return request_error
     end
