@@ -1,12 +1,20 @@
 --[[
 vulcan-file-edit
-Preview or apply simple text edits to one file with a deliberately small tool surface.
-通过刻意精简的工具面预览或应用一个文件的简单文本编辑。
+Preview or apply one small text edit while preserving a stable text contract and optional host change_set output.
+在保持稳定文本契约与可选宿主 change_set 输出的前提下，预览或应用一次小范围文本编辑。
 ]]
 
--- Maximum changed lines rendered in the preview block.
--- 预览区块中最多渲染的变更行数。
-local MAX_PREVIEW_LINES = 80
+-- Visible Markdown title used for edit error payloads.
+-- 编辑错误结果使用的可见 Markdown 标题。
+local ERROR_TITLE = "FILE EDIT ERROR"
+
+-- Visible Markdown title used for edit success payloads.
+-- 编辑成功结果使用的可见 Markdown 标题。
+local RESULT_TITLE = "FILE EDIT RESULT"
+
+-- Visible section title used for preview blocks.
+-- 预览区块使用的可见标题。
+local PREVIEW_TITLE = "Preview"
 
 -- Supported edit modes accepted by this tool.
 -- 本工具接受的编辑模式集合。
@@ -33,135 +41,99 @@ local PARAMETER_ERROR_CODES = {
     invalid_start_line_argument = true,
     invalid_end_line_argument = true,
     invalid_line_argument = true,
-    invalid_line = true,
     line_out_of_bounds = true,
     invalid_range = true,
 }
 
--- Remove surrounding whitespace from a value converted to text.
--- 将值转换为文本后移除首尾空白。
-local function trim(value)
-    return (tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", ""))
+-- Load the shared file helper module from the current entry directory.
+-- 从当前入口目录加载共享文件辅助模块。
+--
+-- Parameters:
+--     None.
+-- 参数：
+--     无。
+--
+-- Returns:
+--     table: Shared helper table used by create and edit entries.
+-- 返回值：
+--     table：create 与 edit 入口共用的辅助表。
+local function load_shared_file_helpers()
+    local entry_dir = tostring(vulcan.context.entry_dir or ".")
+    local helper_path = vulcan.path.join(entry_dir, "shared_file.lua")
+    local chunk, load_error = loadfile(helper_path)
+    if not chunk then
+        error("Failed to load shared_file.lua: " .. tostring(load_error))
+    end
+
+    local ok, helpers = pcall(chunk)
+    if not ok or type(helpers) ~= "table" then
+        error("shared_file.lua did not return a helper table: " .. tostring(helpers))
+    end
+    return helpers
 end
 
--- Check whether one string ends with the given suffix.
--- 检查一个字符串是否以指定后缀结尾。
-local function ends_with(text, suffix)
-    return tostring(text or ""):sub(-#suffix) == suffix
+-- Build one tool-local Markdown error payload through the shared helper.
+-- 通过共享辅助构造一个工具本地 Markdown 错误结果。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     error_code: Stable error identifier.
+--     message: Human-readable error message.
+--     details: Optional key-value details rendered as bullet lines.
+-- 参数：
+--     helpers：共享辅助表。
+--     error_code：稳定错误标识。
+--     message：可读错误信息。
+--     details：以项目符号行渲染的可选键值详情。
+--
+-- Returns:
+--     string: Markdown error payload.
+-- 返回值：
+--     string：Markdown 错误结果文本。
+local function render_error(helpers, error_code, message, details)
+    return helpers.render_error(ERROR_TITLE, PARAMETER_ERROR_CODES, error_code, message, details)
 end
 
--- Render one stable Markdown error payload for invalid edits or file failures.
--- 为无效编辑或文件失败渲染稳定的 Markdown 错误结果。
-local function render_error(error_code, message, details)
-    local is_parameter_error = PARAMETER_ERROR_CODES[tostring(error_code or "")] == true
-    local lines = {
-        "# FILE EDIT ERROR",
-        "",
-        "- error: `" .. tostring(error_code or "unknown_error") .. "`",
-        "- type: `" .. (is_parameter_error and "parameter_error" or "runtime_error") .. "`",
-        "- message: " .. tostring(message or "unknown file edit error"),
-    }
-    if is_parameter_error then
-        table.insert(lines, "- correction: adjust the tool arguments and call again")
-    end
-    for key, value in pairs(details or {}) do
-        table.insert(lines, "- " .. tostring(key) .. ": `" .. tostring(value) .. "`")
-    end
-    return table.concat(lines, "\n")
-end
-
--- Expand `${env:NAME}` placeholders in a caller-provided path before filesystem access.
--- 在访问文件系统之前展开调用方路径中的 `${env:NAME}` 占位符。
--- Parameters: path is the caller path text and field_name is the argument name rendered in errors; returns expanded path or Markdown error text.
--- 参数：path 为调用方路径文本，field_name 为错误中展示的参数名；返回展开后的路径或 Markdown 错误文本。
-local function expand_environment_path(path, field_name)
-    local source = tostring(path or "")
-    local unresolved_variable = nil
-    local expanded = source:gsub("%${env:([^}]+)}", function(variable_name)
-        local normalized_name = trim(variable_name)
-        if normalized_name == "" then
-            unresolved_variable = variable_name
-            return ""
-        end
-
-        local environment_value = os.getenv(normalized_name)
-        if environment_value == nil then
-            unresolved_variable = normalized_name
-            return ""
-        end
-        return environment_value
-    end)
-
-    if unresolved_variable ~= nil then
-        return nil, render_error("environment_variable_not_found", "environment variable referenced in path is not defined", {
-            field = tostring(field_name or "path"),
-            variable = tostring(unresolved_variable),
-            path = source,
-        })
-    end
-    if expanded:find("${env:", 1, true) ~= nil then
-        return nil, render_error("invalid_environment_variable_reference", "environment variable path placeholder must use ${env:NAME} syntax", {
-            field = tostring(field_name or "path"),
-            path = source,
-        })
-    end
-    return expanded, nil
-end
-
--- Validate an optional boolean argument and report type mistakes clearly.
--- 校验可选布尔参数，并清晰报告类型错误。
-local function validate_optional_boolean(value, argument_name)
-    if value == nil or type(value) == "boolean" then
-        return nil
-    end
-    return render_error("invalid_" .. tostring(argument_name) .. "_argument", argument_name .. " must be a boolean when provided", {
-        argument = argument_name,
-        value = tostring(value),
-        actual_type = type(value),
-    })
-end
-
--- Parse an integer argument without silently accepting strings or fractional numbers.
--- 解析整数参数，避免静默接受字符串或小数。
-local function parse_integer_argument(value, argument_name)
-    if type(value) ~= "number" or value ~= math.floor(value) then
-        return nil, render_error("invalid_" .. tostring(argument_name) .. "_argument", argument_name .. " must be an integer number", {
-            argument = argument_name,
-            value = tostring(value),
-            actual_type = type(value),
-        })
-    end
-    return value, nil
-end
-
--- Validate the common edit request fields.
--- 校验通用编辑请求字段。
-local function validate_request(args)
+-- Validate the common edit request fields and normalize the target path to absolute form.
+-- 校验通用编辑请求字段，并将目标路径规范化为绝对路径。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     args: Raw entry argument table from LuaSkills runtime.
+-- 参数：
+--     helpers：共享辅助表。
+--     args：LuaSkills 运行时传入的原始参数表。
+--
+-- Returns:
+--     table|nil: Normalized request table on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     table|nil：成功时返回规范化后的请求表。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function validate_request(helpers, args)
     local request = type(args) == "table" and args or {}
-    if type(request.file) ~= "string" or trim(request.file) == "" then
-        return nil, render_error("invalid_file", "file must be a non-empty string")
+    if type(request.file) ~= "string" or helpers.trim(request.file) == "" then
+        return nil, render_error(helpers, "invalid_file", "file must be a non-empty string")
     end
     if type(request.mode) ~= "string" or not SUPPORTED_MODES[request.mode] then
-        return nil, render_error("invalid_mode", "mode must be overwrite, append, replace_range, insert_before, or insert_after")
+        return nil, render_error(helpers, "invalid_mode", "mode must be overwrite, append, replace_range, insert_before, or insert_after")
     end
     if type(request.content) ~= "string" then
-        return nil, render_error("invalid_content", "content must be a string")
+        return nil, render_error(helpers, "invalid_content", "content must be a string")
     end
     if (request.mode == "append" or request.mode == "insert_before" or request.mode == "insert_after") and request.content == "" then
-        return nil, render_error("empty_content_noop", "append and insert modes require non-empty content")
+        return nil, render_error(helpers, "empty_content_noop", "append and insert modes require non-empty content")
     end
-    local file_path, environment_error = expand_environment_path(trim(request.file), "file")
+
+    local file_path, environment_error = helpers.expand_environment_path(ERROR_TITLE, PARAMETER_ERROR_CODES, helpers.trim(request.file), "file")
     if environment_error then
         return nil, environment_error
     end
-    file_path = trim(file_path)
-    if file_path == "" then
-        return nil, render_error("invalid_file", "file must resolve to a non-empty string")
-    end
-    local apply_error = validate_optional_boolean(request.apply, "apply")
+    local apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, request.apply, "apply")
     if apply_error then
         return nil, apply_error
     end
+
     return {
         file = file_path,
         mode = request.mode,
@@ -173,98 +145,81 @@ local function validate_request(args)
     }, nil
 end
 
--- Read an existing file or return an empty string for overwrite creation.
--- 读取现有文件，或在覆盖创建场景中返回空字符串。
-local function read_existing_file(file_path, mode)
+-- Read one existing file or return an empty baseline for overwrite-based file creation.
+-- 读取一个现有文件，或为基于 overwrite 的文件创建返回空基线。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     file_path: Absolute target file path.
+--     mode: Requested edit mode.
+-- 参数：
+--     helpers：共享辅助表。
+--     file_path：绝对目标文件路径。
+--     mode：请求的编辑模式。
+--
+-- Returns:
+--     string|nil: Original file content on success.
+--     string|nil: Markdown error text on failure.
+--     boolean|nil: True when the file existed before the edit.
+-- 返回值：
+--     string|nil：成功时返回原始文件内容。
+--     string|nil：失败时返回 Markdown 错误文本。
+--     boolean|nil：编辑前文件存在时返回 true。
+local function read_existing_file(helpers, file_path, mode)
     if vulcan.fs.exists(file_path) then
         if vulcan.fs.is_dir(file_path) then
-            return nil, render_error("file_is_directory", "file must point to a regular file", { file = file_path })
+            return nil, render_error(helpers, "file_is_directory", "file must point to a regular file", {
+                file = file_path,
+            }), nil
         end
         local ok, content = pcall(vulcan.fs.read, file_path)
         if not ok then
-            return nil, render_error("file_read_failed", tostring(content), { file = file_path })
+            return nil, render_error(helpers, "file_read_failed", tostring(content), {
+                file = file_path,
+            }), nil
         end
-        return tostring(content or ""), nil
+        return tostring(content or ""), nil, true
     end
 
     if mode == "overwrite" then
-        return "", nil
+        return "", nil, false
     end
-    return nil, render_error("file_not_found", "file does not exist", { file = file_path })
+    return nil, render_error(helpers, "file_not_found", "file does not exist", {
+        file = file_path,
+    }), nil
 end
 
--- Detect the newline sequence that should be preserved for generated content.
--- 检测生成内容时应保留的换行序列。
-local function detect_newline_sequence(content)
-    if tostring(content or ""):find("\r\n", 1, true) then
-        return "\r\n"
-    end
-    return "\n"
-end
-
--- Normalize incoming content to the target file newline sequence.
--- 将输入内容规范化为目标文件的换行序列。
-local function normalize_newlines(content, newline)
-    local normalized = tostring(content or ""):gsub("\r\n", "\n")
-    if newline == "\r\n" then
-        normalized = normalized:gsub("\n", "\r\n")
-    end
-    return normalized
-end
-
--- Split text into logical lines and preserve whether it ended with a newline.
--- 将文本拆分为逻辑行，并保留其是否以换行结尾的信息。
-local function split_lines_with_final_newline(content)
-    local normalized = tostring(content or ""):gsub("\r\n", "\n")
-    local had_final_newline = normalized ~= "" and ends_with(normalized, "\n")
-    if normalized == "" then
-        return {}, false
-    end
-    if had_final_newline then
-        normalized = normalized:sub(1, -2)
-    end
-    local lines = {}
-    for line in (normalized .. "\n"):gmatch("(.-)\n") do
-        table.insert(lines, line)
-    end
-    return lines, had_final_newline
-end
-
--- Join logical lines back into text while preserving final-newline intent.
--- 将逻辑行重新拼接为文本，并保留末尾换行意图。
-local function join_lines(lines, final_newline, newline)
-    local text = table.concat(lines or {}, newline)
-    if final_newline and text ~= "" then
-        text = text .. newline
-    end
-    return text
-end
-
--- Split inserted content into logical lines for line-based operations.
--- 将插入内容拆分为适合行级操作的逻辑行。
-local function split_insert_content(content)
-    local lines, had_final_newline = split_lines_with_final_newline(content)
-    if #lines == 0 and had_final_newline then
-        return { "" }
-    end
-    return lines
-end
-
--- Validate a 1-based line number for insert operations.
+-- Validate one 1-based line number for insert operations.
 -- 校验插入操作使用的 1-based 行号。
-local function validate_insert_line(value, line_count)
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     value: Candidate line number.
+--     line_count: Total number of lines in the original file.
+-- 参数：
+--     helpers：共享辅助表。
+--     value：候选行号。
+--     line_count：原始文件总行数。
+--
+-- Returns:
+--     number|nil: Validated line number on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     number|nil：成功时返回校验通过的行号。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function validate_insert_line(helpers, value, line_count)
     if line_count < 1 then
-        return nil, render_error("line_out_of_bounds", "insert_before and insert_after require an existing anchor line; use append or overwrite for empty files", {
+        return nil, render_error(helpers, "line_out_of_bounds", "insert_before and insert_after require an existing anchor line; use append or overwrite for empty files", {
             total_lines = tostring(line_count),
             allowed_range = "none",
         })
     end
-    local line, line_argument_error = parse_integer_argument(value, "line")
-    if line_argument_error then
-        return nil, line_argument_error
+    local line, argument_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, value, "line")
+    if argument_error then
+        return nil, argument_error
     end
-    if line == nil or line < 1 or line > line_count then
-        return nil, render_error("line_out_of_bounds", "line must point to an existing 1-based anchor line", {
+    if line < 1 or line > line_count then
+        return nil, render_error(helpers, "line_out_of_bounds", "line must point to an existing 1-based anchor line", {
             line = tostring(line),
             total_lines = tostring(line_count),
             allowed_range = "1-" .. tostring(line_count),
@@ -273,87 +228,86 @@ local function validate_insert_line(value, line_count)
     return line, nil
 end
 
--- Validate a 1-based closed line range for replacement operations.
--- 校验替换操作使用的 1-based 闭区间行范围。
-local function validate_replace_range(start_value, end_value, line_count)
+-- Validate one 1-based closed line range for replace_range operations.
+-- 校验 replace_range 操作使用的 1-based 闭区间行范围。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     start_value: Candidate start_line value.
+--     end_value: Candidate end_line value.
+--     line_count: Total number of lines in the original file.
+-- 参数：
+--     helpers：共享辅助表。
+--     start_value：候选 start_line 值。
+--     end_value：候选 end_line 值。
+--     line_count：原始文件总行数。
+--
+-- Returns:
+--     number|nil: Validated start line.
+--     number|nil: Validated end line.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     number|nil：校验通过的起始行号。
+--     number|nil：校验通过的结束行号。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function validate_replace_range(helpers, start_value, end_value, line_count)
     if start_value == nil or end_value == nil then
-        return nil, nil, render_error("invalid_range", "replace_range requires start_line and end_line")
+        return nil, nil, render_error(helpers, "invalid_range", "replace_range requires start_line and end_line")
     end
-    local start_line, start_argument_error = parse_integer_argument(start_value, "start_line")
-    if start_argument_error then
-        return nil, nil, start_argument_error
+    local start_line, start_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, start_value, "start_line")
+    if start_error then
+        return nil, nil, start_error
     end
-    local end_line, end_argument_error = parse_integer_argument(end_value, "end_line")
-    if end_argument_error then
-        return nil, nil, end_argument_error
+    local end_line, end_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, end_value, "end_line")
+    if end_error then
+        return nil, nil, end_error
     end
     if start_line < 1 or end_line < start_line or end_line > line_count then
-        return nil, nil, render_error("invalid_range", "start_line/end_line must describe an existing 1-based line range")
+        return nil, nil, render_error(helpers, "invalid_range", "start_line/end_line must describe an existing 1-based line range")
     end
     return start_line, end_line, nil
 end
 
--- Build a same-directory sidecar path for temporary writes and rollback backups.
--- 构造同目录旁路文件路径，用于临时写入和回滚备份。
-local function build_sidecar_file_path(file_path, label)
-    local directory, file_name = tostring(file_path or ""):match("^(.*[\\/])([^\\/]+)$")
-    directory = directory or ""
-    file_name = file_name or tostring(file_path or "")
-    local base_name, extension = file_name:match("^(.*)(%.[^%.]+)$")
-    if not base_name then
-        base_name = file_name
-        extension = ""
-    end
-
-    local unique_suffix = string.format("%d_%d", os.time(), math.floor((os.clock() % 1) * 1000000))
-    return directory .. base_name .. "." .. tostring(label or "tmp") .. "." .. unique_suffix .. extension
-end
-
--- Remove one sidecar file and ignore cleanup failures.
--- 删除一个旁路文件，并忽略清理失败。
-local function safe_remove_file(file_path)
-    if type(file_path) ~= "string" or file_path == "" then
-        return
-    end
-    if vulcan.fs.exists(file_path) then
-        pcall(os.remove, file_path)
-    end
-end
-
--- Rename one file and normalize platform-specific failure messages.
--- 重命名一个文件，并规范化不同平台的失败信息。
-local function rename_file(source_path, target_path)
-    local ok, renamed, message = pcall(os.rename, source_path, target_path)
-    if not ok then
-        return false, tostring(renamed)
-    end
-    if not renamed then
-        return false, tostring(message or "rename failed")
-    end
-    return true, nil
-end
-
--- Apply the requested edit to text and return the new text plus changed line span.
--- 对文本应用请求的编辑，并返回新文本与变更行范围。
-local function build_edited_content(request, original_content)
-    local newline = detect_newline_sequence(original_content)
-    local normalized_insert = normalize_newlines(request.content, newline)
-    local original_lines, had_final_newline = split_lines_with_final_newline(original_content)
-    local edit_lines = split_insert_content(normalized_insert)
+-- Apply the requested edit to text and return the new content together with changed span metadata.
+-- 对文本应用请求的编辑，并返回新内容与变更区间元数据。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     request: Normalized edit request.
+--     original_content: Original file content.
+-- 参数：
+--     helpers：共享辅助表。
+--     request：规范化后的编辑请求。
+--     original_content：原始文件内容。
+--
+-- Returns:
+--     string|nil: Edited file content on success.
+--     table|nil: Changed span metadata on success.
+--     string|nil: Markdown error text on failure.
+-- 返回值：
+--     string|nil：成功时返回编辑后的文件内容。
+--     table|nil：成功时返回变更区间元数据。
+--     string|nil：失败时返回 Markdown 错误文本。
+local function build_edited_content(helpers, request, original_content)
+    local newline = helpers.detect_newline_sequence(original_content)
+    local normalized_insert = helpers.normalize_newlines(request.content, newline)
+    local original_lines, had_final_newline = helpers.split_lines_with_final_newline(original_content)
+    local edit_lines = helpers.split_insert_content(normalized_insert)
 
     if request.mode == "overwrite" then
+        local inserted_line_count = #helpers.split_insert_content(normalized_insert)
         return normalized_insert, {
             start_line = 1,
-            end_line = math.max(1, #split_insert_content(normalized_insert)),
+            end_line = math.max(1, inserted_line_count),
             original_start_line = 1,
             original_end_line = math.max(1, #original_lines),
-            inserted_line_count = #split_insert_content(normalized_insert),
+            inserted_line_count = inserted_line_count,
         }, nil
     end
 
     if request.mode == "append" then
         local prefix = original_content
-        if prefix ~= "" and not ends_with(prefix:gsub("\r\n", "\n"), "\n") then
+        if prefix ~= "" and not helpers.ends_with(prefix:gsub("\r\n", "\n"), "\n") then
             prefix = prefix .. newline
         end
         return prefix .. normalized_insert, {
@@ -366,7 +320,7 @@ local function build_edited_content(request, original_content)
     end
 
     if request.mode == "replace_range" then
-        local start_line, end_line, range_error = validate_replace_range(request.start_line, request.end_line, #original_lines)
+        local start_line, end_line, range_error = validate_replace_range(helpers, request.start_line, request.end_line, #original_lines)
         if range_error then
             return nil, nil, range_error
         end
@@ -376,7 +330,7 @@ local function build_edited_content(request, original_content)
         for index = #edit_lines, 1, -1 do
             table.insert(original_lines, start_line, edit_lines[index])
         end
-        return join_lines(original_lines, had_final_newline, newline), {
+        return helpers.join_lines(original_lines, had_final_newline, newline), {
             start_line = start_line,
             end_line = start_line + math.max(0, #edit_lines - 1),
             original_start_line = start_line,
@@ -385,16 +339,15 @@ local function build_edited_content(request, original_content)
         }, nil
     end
 
-    local line, line_error = validate_insert_line(request.line, #original_lines)
+    local line, line_error = validate_insert_line(helpers, request.line, #original_lines)
     if line_error then
         return nil, nil, line_error
     end
-
     local insert_index = request.mode == "insert_before" and line or line + 1
     for index = #edit_lines, 1, -1 do
         table.insert(original_lines, insert_index, edit_lines[index])
     end
-    return join_lines(original_lines, had_final_newline, newline), {
+    return helpers.join_lines(original_lines, had_final_newline, newline), {
         start_line = insert_index,
         end_line = insert_index + math.max(0, #edit_lines - 1),
         original_start_line = line,
@@ -403,98 +356,30 @@ local function build_edited_content(request, original_content)
     }, nil
 end
 
--- Append one preview line while respecting the preview line budget.
--- 在遵守预览行数预算的前提下追加一行预览内容。
-local function append_preview_line(output, rendered_count, line)
-    if rendered_count >= MAX_PREVIEW_LINES then
-        return rendered_count, false
-    end
-    table.insert(output, line)
-    return rendered_count + 1, true
-end
-
--- Render one inclusive context range from a line table.
--- 从行表中渲染一个闭区间上下文范围。
-local function render_context_range(output, rendered_count, lines, start_line, end_line, prefix)
-    local safe_start = math.max(1, start_line)
-    local safe_end = math.min(#lines, end_line)
-    for line_number = safe_start, safe_end do
-        local keep_going
-        rendered_count, keep_going = append_preview_line(output, rendered_count, string.format("%sL%d: %s", prefix, line_number, lines[line_number] or ""))
-        if not keep_going then
-            return rendered_count, false
-        end
-    end
-    return rendered_count, true
-end
-
--- Render an operation-oriented preview so inserts and deletions do not look like shifted replacements.
--- 渲染面向操作的预览，避免插入和删除被错位显示成替换。
-local function render_preview(request, original_content, edited_content, changed_span)
-    local original_lines = select(1, split_lines_with_final_newline(original_content))
-    local edited_lines = select(1, split_lines_with_final_newline(edited_content))
-    local original_start = changed_span.original_start_line or changed_span.start_line
-    local original_end = changed_span.original_end_line or changed_span.end_line
-    local edited_start = changed_span.start_line
-    local edited_end = changed_span.end_line
-    local before_context_start = original_start - 3
-    local before_context_end = original_start - 1
-    local after_context_start = original_end + 1
-    local after_context_end = original_end + 3
-    local output = {
-        "## Preview",
-        "",
-        "```diff",
-    }
-
-    if request.mode == "insert_after" then
-        before_context_start = original_start - 2
-        before_context_end = original_start
-    elseif request.mode == "insert_before" then
-        after_context_start = original_start
-        after_context_end = original_start + 2
-    end
-
-    local rendered = 0
-    local keep_going
-    rendered, keep_going = render_context_range(output, rendered, original_lines, before_context_start, before_context_end, " ")
-
-    if keep_going and (request.mode == "replace_range" or request.mode == "overwrite") then
-        rendered, keep_going = render_context_range(output, rendered, original_lines, original_start, original_end, "-")
-    end
-
-    if keep_going and (changed_span.inserted_line_count or 0) > 0 then
-        rendered, keep_going = render_context_range(output, rendered, edited_lines, edited_start, edited_end, "+")
-    end
-
-    if keep_going and request.mode ~= "append" then
-        rendered, keep_going = render_context_range(output, rendered, original_lines, after_context_start, after_context_end, " ")
-    end
-
-    if not keep_going then
-        table.insert(output, "... preview truncated ...")
-    end
-
-    if rendered == 0 then
-        if request.content == "" then
-            table.insert(output, "(no inserted lines)")
-        else
-            table.insert(output, "(no visible line changes)")
-        end
-    end
-
-    table.insert(output, "```")
-    return table.concat(output, "\n")
-end
-
--- Render the final edit result including whether the write was applied.
--- 渲染最终编辑结果，并说明是否已经写入。
-local function render_result(request, original_content, edited_content, changed_span)
+-- Render the final edit result while preserving the current Markdown contract.
+-- 在保持当前 Markdown 契约的前提下渲染最终编辑结果。
+--
+-- Parameters:
+--     helpers: Shared helper table.
+--     request: Normalized edit request.
+--     original_content: Original file content.
+--     edited_content: Edited file content.
+--     changed_span: Changed span metadata.
+-- 参数：
+--     helpers：共享辅助表。
+--     request：规范化后的编辑请求。
+--     original_content：原始文件内容。
+--     edited_content：编辑后的文件内容。
+--     changed_span：变更区间元数据。
+--
+-- Returns:
+--     string: Markdown success payload.
+-- 返回值：
+--     string：Markdown 成功结果文本。
+local function render_result(helpers, request, original_content, edited_content, changed_span)
     local status = request.apply and "APPLIED" or "PREVIEW_ONLY"
-    local original_lines = select(1, split_lines_with_final_newline(original_content))
-    local edited_lines = select(1, split_lines_with_final_newline(edited_content))
-    -- Only render an original span when the original file actually contained that line range.
-    -- 仅当原文件真实包含该行范围时才渲染原始范围。
+    local original_lines = select(1, helpers.split_lines_with_final_newline(original_content))
+    local edited_lines = select(1, helpers.split_lines_with_final_newline(edited_content))
     local original_start_line = changed_span.original_start_line or changed_span.start_line
     local original_end_line = changed_span.original_end_line or changed_span.end_line
     local original_span = "none"
@@ -506,7 +391,7 @@ local function render_result(request, original_content, edited_content, changed_
         edited_span = string.format("L%d-L%d", changed_span.start_line, changed_span.end_line)
     end
     local lines = {
-        "# FILE EDIT RESULT",
+        "# " .. RESULT_TITLE,
         "",
         "- status: `" .. status .. "`",
         "- file: `" .. request.file .. "`",
@@ -517,75 +402,76 @@ local function render_result(request, original_content, edited_content, changed_
         "- edited_span: `" .. edited_span .. "`",
         "- changed_span: `original " .. original_span .. " -> edited " .. edited_span .. "`",
         "",
-        render_preview(request, original_content, edited_content, changed_span),
+        helpers.render_operation_preview(request.mode, request.content, original_content, edited_content, changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
     }
     return table.concat(lines, "\n")
 end
 
--- Write edited content through a temp-file swap with rollback best effort.
--- 通过临时文件替换写入编辑内容，并尽最大努力回滚失败。
-local function write_file(file_path, content, original_content)
-    local temp_path = build_sidecar_file_path(file_path, "tmp")
-    local backup_path = build_sidecar_file_path(file_path, "bak")
-    local existed_before = vulcan.fs.exists(file_path)
-
-    local temp_ok, temp_error = pcall(vulcan.fs.write, temp_path, content)
-    if not temp_ok then
-        safe_remove_file(temp_path)
-        return render_error("temp_write_failed", tostring(temp_error), { file = file_path, temp_file = temp_path })
+-- Determine which canonical host change type should represent the edit result.
+-- 判断哪个 canonical 宿主变更类型最适合表示本次编辑结果。
+--
+-- Parameters:
+--     request: Normalized edit request.
+--     existed_before: Whether the file existed before the edit.
+-- 参数：
+--     request：规范化后的编辑请求。
+--     existed_before：编辑前文件是否存在。
+--
+-- Returns:
+--     string: Either create or modify.
+-- 返回值：
+--     string：create 或 modify。
+local function determine_change_type(request, existed_before)
+    if request.mode == "overwrite" and existed_before ~= true then
+        return "create"
     end
-
-    if existed_before then
-        local backed_up, backup_error = rename_file(file_path, backup_path)
-        if not backed_up then
-            safe_remove_file(temp_path)
-            return render_error("backup_creation_failed", tostring(backup_error), { file = file_path, backup_file = backup_path })
-        end
-    end
-
-    local swapped, swap_error = rename_file(temp_path, file_path)
-    if not swapped then
-        safe_remove_file(temp_path)
-        if existed_before then
-            local restored = rename_file(backup_path, file_path)
-            if not restored then
-                pcall(vulcan.fs.write, file_path, original_content)
-            end
-        end
-        return render_error("temp_swap_failed", tostring(swap_error), { file = file_path, temp_file = temp_path, backup_file = backup_path })
-    end
-
-    if existed_before then
-        safe_remove_file(backup_path)
-    end
-
-    return nil
+    return "modify"
 end
 
--- Tool entry point invoked by the LuaSkills runtime.
--- LuaSkills 运行时调用的工具入口。
+-- Run the edit entry with shared helpers and optional host change_set output.
+-- 使用共享辅助与可选宿主 change_set 输出执行编辑入口。
+--
+-- Parameters:
+--     args: Raw entry argument table from LuaSkills runtime.
+-- 参数：
+--     args：LuaSkills 运行时传入的原始参数表。
+--
+-- Returns:
+--     string: Markdown primary result for AI and text consumers.
+--     nil: No overflow mode is used by this tool.
+--     nil: No template hint is used by this tool.
+--     table|nil: Optional host structured change_set result.
+-- 返回值：
+--     string：面向 AI 与文本消费方的 Markdown 主结果。
+--     nil：本工具不使用 overflow mode。
+--     nil：本工具不使用 template hint。
+--     table|nil：可选的宿主结构化 change_set 结果。
 return function(args)
-    local request, validation_error = validate_request(args)
+    local helpers = load_shared_file_helpers()
+    local request, validation_error = validate_request(helpers, args)
     if validation_error then
         return validation_error
     end
 
-    local original_content, read_error = read_existing_file(request.file, request.mode)
+    local capability = helpers.resolve_host_result_capability()
+    local original_content, read_error, existed_before = read_existing_file(helpers, request.file, request.mode)
     if read_error then
         return read_error
     end
 
-    local edited_content, changed_span, edit_error = build_edited_content(request, original_content)
+    local edited_content, changed_span, edit_error = build_edited_content(helpers, request, original_content)
     if edit_error then
         return edit_error
     end
 
     if request.apply then
-        local write_error = write_file(request.file, edited_content, original_content)
+        local write_error = helpers.write_file(ERROR_TITLE, PARAMETER_ERROR_CODES, request.file, edited_content, original_content)
         if write_error then
             return write_error
         end
     end
 
-    return render_result(request, original_content, edited_content, changed_span)
+    local change_type = determine_change_type(request, existed_before)
+    local host_result = helpers.build_edit_host_result(capability, request.file, original_content, edited_content, changed_span, request.apply, change_type)
+    return render_result(helpers, request, original_content, edited_content, changed_span), nil, nil, host_result
 end

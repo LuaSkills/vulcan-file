@@ -61,6 +61,28 @@ def assert_contains(text: str, fragment: str) -> None:
 
 
 """
+Assert that one text block does not contain CJK ideographs.
+断言一个文本块不包含中日韩统一表意文字。
+
+Parameters:
+    text: Source text to inspect.
+    label: Human-readable file or block label for failure output.
+参数：
+    text：需要检查的源文本。
+    label：失败输出中使用的人类可读文件或文本块标签。
+
+Returns:
+    None: Raises AssertionError when any CJK ideograph is found.
+返回值：
+    None：发现任意中日韩统一表意文字时抛出 AssertionError。
+"""
+def assert_no_cjk(text: str, label: str) -> None:
+    for char in text:
+        if "\u4e00" <= char <= "\u9fff":
+            raise AssertionError(f"Help text must stay English-only: {label}")
+
+
+"""
 Validate the manifest-level public tool contract.
 校验清单层面的公开工具契约。
 
@@ -71,10 +93,15 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.3")
+    assert_contains(skill_yaml, "version: 0.1.5")
+    assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/edit.input.schema.json")
+
+    create_schema = read_text("schemas/create.input.schema.json")
+    assert_contains(create_schema, '"content"')
+    assert_contains(create_schema, '"apply"')
 
     read_schema = read_text("schemas/read.input.schema.json")
     assert_contains(read_schema, '"segments"')
@@ -92,9 +119,11 @@ Returns:
     None：缺少保护逻辑时抛出 AssertionError。
 """
 def test_runtime_guardrails() -> None:
+    create_runtime = read_text("runtime/vulcan-file-create.lua")
     read_runtime = read_text("runtime/vulcan-file-read.lua")
     list_runtime = read_text("runtime/vulcan-file-list.lua")
     edit_runtime = read_text("runtime/vulcan-file-edit.lua")
+    shared_runtime = read_text("runtime/shared_file.lua")
 
     assert_contains(read_runtime, "literal word newline")
     assert_contains(read_runtime, "5,10\\\\n25,30")
@@ -103,7 +132,11 @@ def test_runtime_guardrails() -> None:
     assert_contains(list_runtime, "validate_basename_pattern")
     assert_contains(list_runtime, "pattern must be a basename-only glob")
     assert_contains(edit_runtime, "line_out_of_bounds")
-    assert_contains(edit_runtime, "allowed_range")
+    assert_contains(create_runtime, "file_already_exists")
+    assert_contains(create_runtime, "parent_directory_not_found")
+    assert_contains(shared_runtime, 'kind = "change_set"')
+    assert_contains(shared_runtime, "allows_change_set")
+    assert_contains(shared_runtime, "max_payload_bytes")
 
 
 """
@@ -120,6 +153,7 @@ def test_documentation_guidance() -> None:
         [
             read_text("README.md"),
             read_text("README.zh-CN.md"),
+            read_text("help/create.md"),
             read_text("help/read.md"),
             read_text("help/list.md"),
             read_text("help/edit.md"),
@@ -136,8 +170,31 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "src/*.lua")
     assert_contains(docs, "not a full Git ignore engine")
     assert_contains(docs, "默认 200 行")
-    assert_contains(docs, "唯一允许在文件不存在时创建新文件")
+    assert_contains(docs, "vulcan-file-create")
+    assert_contains(docs, "file_already_exists")
+    assert_contains(docs, "parent_directory_not_found")
     assert_contains(docs, "line_out_of_bounds")
+
+
+"""
+Validate that all help markdown files stay English-only.
+校验所有 help Markdown 文件保持纯英文。
+
+Returns:
+    None: Raises AssertionError when any help file contains CJK text.
+返回值：
+    None：任一 help 文件包含中日韩统一表意文字时抛出 AssertionError。
+"""
+def test_help_markdown_is_english_only() -> None:
+    help_files = [
+        "help/help.md",
+        "help/create.md",
+        "help/read.md",
+        "help/list.md",
+        "help/edit.md",
+    ]
+    for relative_path in help_files:
+        assert_no_cjk(read_text(relative_path), relative_path)
 
 
 """
@@ -153,6 +210,7 @@ def main() -> None:
     test_skill_manifest_contract()
     test_runtime_guardrails()
     test_documentation_guidance()
+    test_help_markdown_is_english_only()
 
 
 if __name__ == "__main__":

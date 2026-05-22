@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "file": {
+      "type": "string",
+      "description": "Use the exact file path to create. Supports ${env:NAME} placeholders and resolves relative paths against the runtime cwd."
+    },
+    "content": {
+      "type": "string",
+      "description": "Use the complete content for the brand-new file. Empty content is allowed and creates an empty file."
+    },
+    "apply": {
+      "type": "boolean",
+      "description": "Leave false for preview. Set true only when the previewed file creation is ready to write."
+    }
+  },
+  "required": [
+    "file",
+    "content"
+  ]
+}

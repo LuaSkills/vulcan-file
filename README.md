@@ -18,6 +18,7 @@ The current LuaSkills naming model uses the canonical `skill_id-entry_name` form
 
 - `vulcan-file-list`
 - `vulcan-file-read`
+- `vulcan-file-create`
 - `vulcan-file-edit`
 
 Some MCP clients or host bindings may expose the same tools with underscores, such as `vulcan_file_read`. That is only a naming difference at the exposure layer; the semantics still map to the same File entries.
@@ -25,13 +26,13 @@ Some MCP clients or host bindings may expose the same tools with underscores, su
 It is closer to a small text-file workbench built for agents and automated engineering flows:
 
 - First shrink the candidate set with a low-token file map.
-- Then read raw text with explicit line numbers.
-- Then preview edits based on inspected context.
+- Then read raw text with explicit line numbers when the file already exists.
+- Then preview new files with `create` or small changes with `edit`.
 - Finally write only when the preview matches the intended change.
 
 In one sentence:
 
-**Find the file, read the evidence, preview the edit, then write.**
+**Find the file, read the evidence, preview the create or edit step, then write.**
 
 ## What Problem It Solves
 
@@ -167,6 +168,30 @@ Boundary behavior is explicit:
 
 This is not a tool for guessing through pages. If the text location is unknown, search or list candidates first.
 
+### `vulcan-file-create`
+
+Use this when you need to create one brand-new file and want preview-first behavior instead of writing immediately.
+
+Typical fits:
+
+- The target file does not exist yet.
+- The final file path and full file content are already known.
+- The workflow should distinguish clearly between creating a new file and editing an existing one.
+- The host should receive one canonical `change_set` create record when structured host results are enabled.
+
+Typical parameters:
+
+- `file`: exact target file path; `${env:NAME}` placeholders are supported and relative paths are resolved against the runtime cwd.
+- `content`: complete content of the new file; `""` is allowed and creates an empty file.
+- `apply`: leave false for preview, set true only when the preview is correct.
+
+Boundary behavior is explicit:
+
+- Existing targets return `file_already_exists`; they are never overwritten silently.
+- Missing parent directories return `parent_directory_not_found`.
+- Parent paths that exist but are not directories return `parent_path_not_directory`.
+- Preview output shows the creation as a plus-only diff block and is truncated after 80 preview lines.
+
 ### `vulcan-file-edit`
 
 Use this for small text edits after the target file and target lines have been confirmed.
@@ -177,7 +202,7 @@ The `file` path may include `${env:NAME}` placeholders, which are expanded with 
 
 Supported modes:
 
-- `overwrite`: replace the whole file, or create it when it does not exist; `content=""` creates or leaves an empty file.
+- `overwrite`: replace the whole file. For backward compatibility it still creates the file when it does not exist, but `vulcan-file-create` is now the preferred entry for brand-new files; `content=""` creates or leaves an empty file.
 - `append`: append at the end of the file as new lines; if the original file is non-empty and lacks a final newline, one is inserted before the appended content.
 - `replace_range`: replace an existing 1-based closed line range; `content=""` deletes that range.
 - `insert_before`: insert before an existing 1-based anchor line.
@@ -192,6 +217,7 @@ The result includes:
 - Original affected span
 - Edited affected span
 - Operation-oriented diff preview
+- A canonical host `change_set` when structured host results are enabled by the host
 - Clear correction hints for parameter errors
 
 It deliberately avoids complex structural reasoning. Use `vulcan-codekit-patch` for whole-function or whole-method replacement. Use CodeKit first when source structure must be understood before editing.
@@ -208,9 +234,9 @@ In `Vulcan File`, the recommended path is usually not:
 Instead:
 
 1. Use `list` to get a candidate file map.
-2. Use `read` to inspect exact target lines.
-3. Use `edit` to generate a preview.
-4. Use `edit apply=true` only after the preview is correct.
+2. Use `read` to inspect exact target lines when the file already exists.
+3. Use `create` to preview brand-new files, or `edit` to preview small changes to existing files.
+4. Use `create apply=true` or `edit apply=true` only after the preview is correct.
 
 In other words:
 
@@ -244,10 +270,11 @@ Those commands work, but each call requires a fresh decision:
 - Can the line format be cited directly?
 - Is there a clear enough preview before editing?
 
-With `Vulcan File`, these concerns are organized into three stable entries:
+With `Vulcan File`, these concerns are organized into four stable entries:
 
 - File candidates: `list`
 - Raw evidence: `read`
+- Brand-new files: `create`
 - Small text changes: `edit`
 
 This is not shell functionality with a different name. It is a small protocol that makes common file actions safer for agents to call.
@@ -264,6 +291,7 @@ This is not shell functionality with a different name. It is a small protocol th
 
 - `vulcan-file-list`
 - `vulcan-file-read`
+- `vulcan-file-create`
 - `vulcan-file-edit`
 
 ## Repository Notes

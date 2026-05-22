@@ -1,11 +1,14 @@
 name: vulcan-file
-version: 0.1.3
+version: 0.1.5
 debug: false
 help:
   main:
     description: Help agents decide when to use vulcan-file instead of CodeKit, rg, or shell snippets.
     file: help/help.md
   topics:
+    - name: create
+      description: Create one brand-new file with preview-first behavior.
+      file: help/create.md
     - name: read
       description: Read one or more raw text snippets when the file path and approximate line area are known.
       file: help/read.md
@@ -16,6 +19,12 @@ help:
       description: Make small preview-first text edits after target lines have been inspected.
       file: help/edit.md
 entries:
+  - name: create
+    description: "[AI FILE CREATE] Use when you want to create one brand-new file with preview-first semantics. It errors when the target file already exists and returns a host change_set when supported."
+    lua_entry: runtime/vulcan-file-create.lua
+    lua_module: vulcan_file_create
+    help: create
+    input_schema_file: schemas/create.input.schema.json
   - name: read
     description: "[AI FILE READ] Use when you already know the target file and line area and need exact source text. Prefer segments as an array of {start, count} objects; keep lines_rule only for legacy clients that cannot send arrays. Do not use this to search; use codekit-rg first."
     lua_entry: runtime/vulcan-file-read.lua
