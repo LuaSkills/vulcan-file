@@ -93,7 +93,7 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.6")
+    assert_contains(skill_yaml, "version: 0.1.7")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
@@ -160,7 +160,12 @@ def test_runtime_guardrails() -> None:
     assert_contains(shared_runtime, "max_payload_bytes")
     assert_contains(shared_runtime, "MAX_BATCH_FILES = 10")
     assert_contains(shared_runtime, 'BINARY_FILE_PLACEHOLDER = "Binary file"')
+    assert_contains(shared_runtime, "DELETE_TRUNCATE_LINE_LIMIT = 500")
+    assert_contains(shared_runtime, "DELETE_TRUNCATED_EDGE_LINE_COUNT = 50")
     assert_contains(shared_runtime, "build_delete_file_record")
+    assert_contains(shared_runtime, 'content_mode = "truncated"')
+    assert_contains(shared_runtime, 'type(vulcan.fs.rename) == "function"')
+    assert_contains(shared_runtime, 'type(vulcan.fs.remove) == "function"')
 
 
 """
@@ -203,6 +208,11 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "line_out_of_bounds")
     assert_contains(docs, "directory_delete_unsupported")
     assert_contains(docs, "Binary file")
+    assert_contains(docs, 'content_mode="truncated"')
+    assert_contains(docs, "content_head")
+    assert_contains(docs, "content_tail")
+    assert_contains(docs, "500")
+    assert_contains(docs, "50")
     assert_contains(docs, "up to 10")
     assert_contains(docs, "最多 10")
 

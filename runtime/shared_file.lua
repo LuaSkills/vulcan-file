@@ -16,6 +16,14 @@ local MAX_BATCH_FILES = 10
 -- 当某个被删除文件应按二进制处理时返回的稳定占位文本。
 local BINARY_FILE_PLACEHOLDER = "Binary file"
 
+-- Stable line limit after which delete host records switch to truncated content mode.
+-- 删除宿主记录切换到截断内容模式的稳定行数阈值。
+local DELETE_TRUNCATE_LINE_LIMIT = 500
+
+-- Stable number of leading and trailing lines kept in truncated delete host records.
+-- 截断删除宿主记录中稳定保留的首尾行数。
+local DELETE_TRUNCATED_EDGE_LINE_COUNT = 50
+
 -- Return whether one value is a non-empty string after trimming.
 -- 返回一个值在去除首尾空白后是否为非空字符串。
 --
@@ -538,8 +546,8 @@ local function detect_host_os()
     return package.config:sub(1, 1) == "\\" and "windows" or "unix"
 end
 
--- Execute one host process command for filesystem operations that must preserve Unicode path fidelity.
--- 执行一个宿主进程命令，用于必须保留 Unicode 路径精度的文件系统操作。
+-- Execute one host process command for compatibility fallback filesystem operations.
+-- 执行一个宿主进程命令，用于兼容性回退文件系统操作。
 --
 -- Parameters:
 --     program: Host program name.
@@ -605,16 +613,20 @@ end
 --     无。
 --
 -- Important:
---     On Windows, use a host-managed delete command instead of Lua `os.remove`
---     so Unicode file paths continue to work.
+--     Prefer `vulcan.fs.remove` when available because the host runtime provides
+--     more stable cross-platform filesystem behavior than Lua `os.remove`.
 -- 重要说明：
---     在 Windows 上，使用宿主管理的删除命令替代 Lua `os.remove`，
---     以确保 Unicode 文件路径仍然可用。
+--     如果可用，应优先使用 `vulcan.fs.remove`，因为宿主运行时提供的
+--     跨平台文件系统行为比 Lua `os.remove` 更稳定。
 local function safe_remove_file(file_path)
     if type(file_path) ~= "string" or file_path == "" then
         return
     end
     if vulcan.fs.exists(file_path) then
+        if vulcan and vulcan.fs and type(vulcan.fs.remove) == "function" then
+            pcall(vulcan.fs.remove, file_path)
+            return
+        end
         local host_os = detect_host_os()
         if host_os == "windows" then
             pcall(execute_host_process, "powershell", {
@@ -648,12 +660,22 @@ end
 --     string|nil：重命名失败时返回失败信息。
 --
 -- Important:
---     On Windows, use a host-managed move command instead of Lua `os.rename`
---     because the Lua standard library path layer is not reliable for Unicode file names.
+--     Prefer `vulcan.fs.rename` when available so host-managed Unicode and
+--     cross-platform path behavior stays consistent with the runtime contract.
 -- 重要说明：
---     在 Windows 上，使用宿主管理的移动命令替代 Lua `os.rename`，
---     因为 Lua 标准库的路径层对 Unicode 文件名并不可靠。
+--     如果可用，应优先使用 `vulcan.fs.rename`，从而让宿主管理的 Unicode
+--     与跨平台路径行为保持与运行时契约一致。
 local function rename_file(source_path, target_path)
+    if vulcan and vulcan.fs and type(vulcan.fs.rename) == "function" then
+        local ok, renamed_or_error = pcall(vulcan.fs.rename, source_path, target_path)
+        if not ok then
+            return false, tostring(renamed_or_error)
+        end
+        if renamed_or_error == true then
+            return true, nil
+        end
+        return false, "rename failed"
+    end
     local host_os = detect_host_os()
     if host_os == "windows" then
         return execute_host_process("powershell", {
@@ -742,8 +764,8 @@ local function write_file(error_title, parameter_error_codes, file_path, content
     return nil
 end
 
--- Delete one file path through the host OS layer and normalize failure messages.
--- 通过宿主操作系统层删除一个文件路径，并规范化失败信息。
+-- Delete one file path through the host filesystem layer and normalize failure messages.
+-- 通过宿主文件系统层删除一个文件路径，并规范化失败信息。
 --
 -- Parameters:
 --     error_title: Visible Markdown title for errors.
@@ -759,6 +781,20 @@ end
 -- 返回值：
 --     string|nil：失败时返回 Markdown 错误文本，否则返回 nil。
 local function delete_file(error_title, parameter_error_codes, file_path)
+    if vulcan and vulcan.fs and type(vulcan.fs.remove) == "function" then
+        local ok, removed_or_error = pcall(vulcan.fs.remove, file_path)
+        if not ok then
+            return render_error(error_title, parameter_error_codes, "file_delete_failed", tostring(removed_or_error), {
+                file = file_path,
+            })
+        end
+        if removed_or_error == true then
+            return nil
+        end
+        return render_error(error_title, parameter_error_codes, "file_delete_failed", "delete failed", {
+            file = file_path,
+        })
+    end
     local host_os = detect_host_os()
     if host_os == "windows" then
         local removed, remove_error = execute_host_process("powershell", {
@@ -787,6 +823,73 @@ local function delete_file(error_title, parameter_error_codes, file_path)
         })
     end
     return nil
+end
+
+-- Build one joined line slice from a logical line table using canonical `\\n` separators.
+-- 使用 canonical `\\n` 分隔符从逻辑行表中构造一个拼接后的行片段。
+--
+-- Parameters:
+--     lines: Source logical line table.
+--     start_line: First 1-based line to include.
+--     end_line: Last 1-based line to include.
+-- 参数：
+--     lines：源逻辑行表。
+--     start_line：需要包含的首个 1-based 行号。
+--     end_line：需要包含的最后一个 1-based 行号。
+--
+-- Returns:
+--     string: Joined line slice text.
+-- 返回值：
+--     string：拼接后的行片段文本。
+local function build_delete_content_slice(lines, start_line, end_line)
+    local buffer = {}
+    local safe_start = math.max(1, tonumber(start_line) or 1)
+    local safe_end = math.min(#(lines or {}), tonumber(end_line) or 0)
+    if safe_start > safe_end then
+        return ""
+    end
+    for line_number = safe_start, safe_end do
+        table.insert(buffer, tostring(lines[line_number] or ""))
+    end
+    return table.concat(buffer, "\n")
+end
+
+-- Build canonical delete-record content fields that match the official full or truncated modes.
+-- 构造与官方 full 或 truncated 模式一致的 canonical 删除记录内容字段。
+--
+-- Parameters:
+--     content: Deleted file content or one stable placeholder string.
+--     total_line_count: Total logical line count represented by the delete record.
+-- 参数：
+--     content：被删除文件内容或一个稳定占位字符串。
+--     total_line_count：删除记录表示的总逻辑行数。
+--
+-- Returns:
+--     table: Canonical delete content field table.
+-- 返回值：
+--     table：canonical 删除内容字段表。
+local function build_delete_content_fields(content, total_line_count)
+    local normalized_content = tostring(content or "")
+    local lines = select(1, split_lines_with_final_newline(normalized_content))
+    local line_count = tonumber(total_line_count)
+    if line_count == nil or line_count < 0 then
+        line_count = #lines
+    end
+    if line_count > DELETE_TRUNCATE_LINE_LIMIT then
+        local head_count = math.min(line_count, DELETE_TRUNCATED_EDGE_LINE_COUNT)
+        local tail_count = math.min(DELETE_TRUNCATED_EDGE_LINE_COUNT, math.max(0, line_count - head_count))
+        return {
+            content_mode = "truncated",
+            total_line_count = line_count,
+            content_head = build_delete_content_slice(lines, 1, head_count),
+            content_tail = tail_count > 0 and build_delete_content_slice(lines, line_count - tail_count + 1, line_count) or "",
+        }
+    end
+    return {
+        content_mode = "full",
+        total_line_count = line_count,
+        content = normalized_content,
+    }
 end
 
 -- Read one binary sample from disk for lightweight file-type inspection.
@@ -955,6 +1058,7 @@ end
 --     end_line: Last 1-based line number to render.
 --     prefix: Prefix such as space, plus, or minus.
 --     max_preview_lines: Maximum preview line budget.
+--     display_start_line: Optional visible first 1-based line number.
 -- 参数：
 --     output：需要原地追加的输出行表。
 --     rendered_count：已经渲染的行数。
@@ -963,6 +1067,7 @@ end
 --     end_line：需要渲染的最后一个 1-based 行号。
 --     prefix：前缀，例如空格、加号或减号。
 --     max_preview_lines：允许的最大预览行预算。
+--     display_start_line：可选的可见首个 1-based 行号。
 --
 -- Returns:
 --     number: Updated rendered line count.
@@ -970,12 +1075,15 @@ end
 -- 返回值：
 --     number：更新后的已渲染行数。
 --     boolean：仍可继续渲染时返回 true。
-local function render_context_range(output, rendered_count, lines, start_line, end_line, prefix, max_preview_lines)
+local function render_context_range(output, rendered_count, lines, start_line, end_line, prefix, max_preview_lines, display_start_line)
     local safe_start = math.max(1, start_line)
     local safe_end = math.min(#lines, end_line)
+    local source_base = tonumber(start_line) or safe_start
+    local display_base = tonumber(display_start_line) or source_base
     for line_number = safe_start, safe_end do
+        local display_line_number = display_base + (line_number - source_base)
         local keep_going
-        rendered_count, keep_going = append_preview_line(output, rendered_count, string.format("%sL%d: %s", prefix, line_number, lines[line_number] or ""), max_preview_lines)
+        rendered_count, keep_going = append_preview_line(output, rendered_count, string.format("%sL%d: %s", prefix, display_line_number, lines[line_number] or ""), max_preview_lines)
         if not keep_going then
             return rendered_count, false
         end
@@ -1012,12 +1120,14 @@ local function render_operation_preview(request_mode, request_content, original_
     local edited_lines = select(1, split_lines_with_final_newline(edited_content))
     local original_start = changed_span.original_start_line or changed_span.start_line
     local original_end = changed_span.original_end_line or changed_span.end_line
-    local edited_start = changed_span.start_line
-    local edited_end = changed_span.end_line
+    local edited_start = changed_span.start_line or 1
+    local edited_end = changed_span.end_line or edited_start
+    local inserted_line_count = tonumber(changed_span.inserted_line_count) or 0
     local before_context_start = original_start - 3
     local before_context_end = original_start - 1
     local after_context_start = original_end + 1
     local after_context_end = original_end + 3
+    local after_context_display_start = edited_start + inserted_line_count
     local output = {
         "## " .. tostring(preview_title or "Preview"),
         "",
@@ -1040,12 +1150,12 @@ local function render_operation_preview(request_mode, request_content, original_
         rendered, keep_going = render_context_range(output, rendered, original_lines, original_start, original_end, "-", preview_limit)
     end
 
-    if keep_going and (changed_span.inserted_line_count or 0) > 0 then
+    if keep_going and inserted_line_count > 0 then
         rendered, keep_going = render_context_range(output, rendered, edited_lines, edited_start, edited_end, "+", preview_limit)
     end
 
     if keep_going and request_mode ~= "append" then
-        rendered, keep_going = render_context_range(output, rendered, original_lines, after_context_start, after_context_end, " ", preview_limit)
+        rendered, keep_going = render_context_range(output, rendered, original_lines, after_context_start, after_context_end, " ", preview_limit, after_context_display_start)
     end
 
     if not keep_going then
@@ -1157,11 +1267,13 @@ local function build_modify_file_record(file_path, original_content, edited_cont
     local original_end = changed_span.original_end_line or changed_span.end_line
     local edited_start = changed_span.start_line or 1
     local edited_end = changed_span.end_line or (changed_span.start_line or 1)
+    local inserted_line_count = tonumber(changed_span.inserted_line_count) or 0
+    local after_context_start = edited_start + inserted_line_count
     local before_context = build_context_string(original_lines, original_start - 3, original_start - 1, newline)
-    local after_context = build_context_string(original_lines, original_end + 1, original_end + 3, newline)
+    local after_context = build_context_string(edited_lines, after_context_start, after_context_start + 2, newline)
     local deleted_lines = build_line_entries(original_lines, original_start, original_end)
     local inserted_lines = {}
-    if (changed_span.inserted_line_count or 0) > 0 then
+    if inserted_line_count > 0 then
         inserted_lines = build_line_entries(edited_lines, edited_start, edited_end)
     end
     if #deleted_lines == 0 and #inserted_lines == 0 then
@@ -1209,20 +1321,25 @@ end
 -- Parameters:
 --     file_path: Absolute target file path.
 --     content: Deleted file content or one stable binary placeholder.
+--     total_line_count: Total logical line count represented by the delete content.
 -- 参数：
 --     file_path：绝对目标文件路径。
 --     content：被删除文件内容，或稳定的二进制占位文本。
+--     total_line_count：删除内容表示的总逻辑行数。
 --
 -- Returns:
 --     table: Canonical `change_set.files[]` delete record.
 -- 返回值：
 --     table：canonical `change_set.files[]` delete 记录。
-local function build_delete_file_record(file_path, content)
-    return {
+local function build_delete_file_record(file_path, content, total_line_count)
+    local record = {
         change = "delete",
         path = tostring(file_path or ""),
-        content = tostring(content or ""),
     }
+    for key, value in pairs(build_delete_content_fields(content, total_line_count)) do
+        record[key] = value
+    end
+    return record
 end
 
 -- Resolve one normalized snapshot of the current host structured-result capability.
@@ -1413,6 +1530,8 @@ return {
     DEFAULT_MAX_PREVIEW_LINES = DEFAULT_MAX_PREVIEW_LINES,
     MAX_BATCH_FILES = MAX_BATCH_FILES,
     BINARY_FILE_PLACEHOLDER = BINARY_FILE_PLACEHOLDER,
+    DELETE_TRUNCATE_LINE_LIMIT = DELETE_TRUNCATE_LINE_LIMIT,
+    DELETE_TRUNCATED_EDGE_LINE_COUNT = DELETE_TRUNCATED_EDGE_LINE_COUNT,
     trim = trim,
     has_trimmed_text = has_trimmed_text,
     starts_with = starts_with,

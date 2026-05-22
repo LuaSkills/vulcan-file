@@ -248,6 +248,7 @@ Boundary behavior is explicit:
 - Missing targets return `file_not_found`.
 - Directory removal is not supported; directory paths return `directory_delete_unsupported`.
 - Text-like files return line-oriented delete previews and host delete content.
+- Host `change_set` delete records follow the official content modes: up to 500 lines they return `content_mode="full"` with full `content`, and above 500 lines they proactively switch to `content_mode="truncated"` with `total_line_count`, `content_head`, and `content_tail` for the first and last 50 lines.
 - Binary or non-text files use the stable placeholder `Binary file` and report one removed line for preview purposes.
 
 ## A Better File Workflow For Agents

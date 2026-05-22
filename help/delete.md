@@ -28,5 +28,6 @@ Boundary behavior:
 - Missing targets return `file_not_found`.
 - Directory paths return `directory_delete_unsupported`; `delete` only accepts regular files.
 - Text-like files return line-oriented delete previews and host delete content.
+- Host `change_set` delete records use `content_mode="full"` for up to 500 lines and `content_mode="truncated"` beyond that, with `total_line_count` plus `content_head` and `content_tail` holding the first and last 50 lines.
 - Binary or non-text files do not pretend to return real line content. They use the stable English placeholder `Binary file` and report one removed line for preview purposes.
 - The preview shows at most 80 lines of changed context per file; larger previews are marked with `preview truncated`.

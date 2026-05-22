@@ -287,7 +287,7 @@ local function prepare_operation(helpers, request)
         request = request,
         inspection = inspection,
         changed_span = changed_span,
-        file_record = helpers.build_delete_file_record(request.file, inspection.content),
+        file_record = helpers.build_delete_file_record(request.file, inspection.content, inspection.removed_lines),
     }, nil
 end
 

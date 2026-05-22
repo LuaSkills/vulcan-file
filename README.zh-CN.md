@@ -246,6 +246,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - 目标不存在时返回 `file_not_found`
 - 不支持目录删除；目录路径会返回 `directory_delete_unsupported`
 - 文本类文件会返回按行删除预览和宿主删除内容
+- 宿主 `change_set` 删除记录遵循官方内容模式：不超过 500 行时返回 `content_mode=\"full\"` 和完整 `content`；超过 500 行时会主动切换为 `content_mode=\"truncated\"`，并返回 `total_line_count`、前 50 行 `content_head` 与后 50 行 `content_tail`
 - 二进制或非文本文件不会伪造真实行内容，而是使用稳定占位符 `Binary file`，并在预览层按 1 行删除处理
 
 ## 一套更适合 Agent 的文件工作流
