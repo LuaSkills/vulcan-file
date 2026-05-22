@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "file": {
+      "type": "string",
+      "description": "Use the exact file path to edit. Supports ${env:NAME} placeholders."
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "overwrite",
+        "append",
+        "replace_range",
+        "insert_before",
+        "insert_after"
+      ],
+      "description": "Choose overwrite to replace or create a file, append for new-line file-end additions, replace_range for existing 1-based closed line ranges, or insert_before/insert_after for anchored inserts on existing lines."
+    },
+    "content": {
+      "type": "string",
+      "description": "Use the complete replacement or insertion text for the selected mode. Empty content is allowed only for overwrite or replace_range, where it clears the file or deletes the selected range."
+    },
+    "start_line": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Use only with replace_range; this is the first existing 1-based line to replace."
+    },
+    "end_line": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Use only with replace_range; this is the last existing 1-based line to replace."
+    },
+    "line": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Use only with insert_before or insert_after; this must point to an existing 1-based anchor line. Out-of-range values return line_out_of_bounds instead of appending."
+    },
+    "apply": {
+      "type": "boolean",
+      "description": "Leave false for preview. Set true only when the previewed edit is ready to write."
+    }
+  },
+  "required": [
+    "file",
+    "mode",
+    "content"
+  ]
+}

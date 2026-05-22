@@ -71,13 +71,15 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.2")
-    assert_contains(skill_yaml, 'literal word "newline"')
-    assert_contains(skill_yaml, "basename-only file-name glob")
-    assert_contains(skill_yaml, "src/*.lua or **/*.md")
-    assert_contains(skill_yaml, "Defaults to 1000")
-    assert_contains(skill_yaml, "replace or create a file")
-    assert_contains(skill_yaml, "line_out_of_bounds")
+    assert_contains(skill_yaml, "version: 0.1.3")
+    assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
+    assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
+    assert_contains(skill_yaml, "input_schema_file: schemas/edit.input.schema.json")
+
+    read_schema = read_text("schemas/read.input.schema.json")
+    assert_contains(read_schema, '"segments"')
+    assert_contains(read_schema, '"type": "array"')
+    assert_contains(read_schema, '"lines_rule"')
 
 
 """
@@ -96,6 +98,8 @@ def test_runtime_guardrails() -> None:
 
     assert_contains(read_runtime, "literal word newline")
     assert_contains(read_runtime, "5,10\\\\n25,30")
+    assert_contains(read_runtime, "segments and lines_rule cannot be provided together")
+    assert_contains(read_runtime, "segments must be an array of {start, count} objects")
     assert_contains(list_runtime, "validate_basename_pattern")
     assert_contains(list_runtime, "pattern must be a basename-only glob")
     assert_contains(edit_runtime, "line_out_of_bounds")
@@ -122,7 +126,11 @@ def test_documentation_guidance() -> None:
         ]
     )
 
+    assert_contains(docs, '"segments": [')
+    assert_contains(docs, '{ "start": 5, "count": 10 }')
     assert_contains(docs, '"lines_rule": "5,10\\n25,30"')
+    assert_contains(docs, "legacy fallback")
+    assert_contains(docs, "旧版兼容")
     assert_contains(docs, 'not the literal word `"newline"`')
     assert_contains(docs, "不是字面字符串")
     assert_contains(docs, "src/*.lua")

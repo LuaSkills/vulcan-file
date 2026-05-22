@@ -5,6 +5,7 @@ Validate the vulcan-file LuaSkill repository against strict package rules.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -54,6 +55,17 @@ def load_yaml(path: Path) -> dict:
 
 
 """
+Load one JSON document from disk and require one object root.
+从磁盘加载一份 JSON 文档并强制要求根节点为对象。
+"""
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    require(isinstance(payload, dict), f"Expected one JSON object in {path}")
+    return payload
+
+
+"""
 Validate the strict top-level repository layout.
 校验严格的顶层仓库目录结构。
 """
@@ -65,6 +77,7 @@ def validate_layout(root: Path) -> None:
     ]
     required_dirs = [
         root / "runtime",
+        root / "schemas",
         root / "help",
         root / "overflow_templates",
         root / "resources",
@@ -97,6 +110,16 @@ def validate_manifest(root: Path) -> None:
         require(isinstance(entry_name, str) and entry_name, "Each entry requires a non-empty name")
         require(isinstance(lua_entry, str) and lua_entry, f"Entry '{entry_name}' requires lua_entry")
         require((root / lua_entry).is_file(), f"Entry '{entry_name}' points to a missing file: {lua_entry}")
+        input_schema_file = entry.get("input_schema_file")
+        require(
+            isinstance(input_schema_file, str) and input_schema_file,
+            f"Entry '{entry_name}' requires input_schema_file",
+        )
+        require(
+            input_schema_file.startswith("schemas/"),
+            f"Entry '{entry_name}' input_schema_file must stay under schemas/: {input_schema_file}",
+        )
+        load_json(root / input_schema_file)
 
     help_block = manifest.get("help", {})
     main_help = help_block.get("main")

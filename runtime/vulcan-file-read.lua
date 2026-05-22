@@ -24,6 +24,8 @@ local PARAMETER_ERROR_CODES = {
     environment_variable_not_found = true,
     invalid_environment_variable_reference = true,
     invalid_lines_rule = true,
+    invalid_segments_argument = true,
+    conflicting_range_arguments = true,
     range_out_of_bounds = true,
     invalid_numbered_argument = true,
 }
@@ -160,6 +162,66 @@ local function parse_positive_integer_text(value, field_name, segment, segment_i
         })
     end
 
+    return math.floor(number_value), nil
+end
+
+-- Parse one positive integer value from a structured segments item.
+-- 从结构化 segments 项中解析一个正整数值。
+local function parse_segment_integer(value, field_name, segment_index)
+    local value_type = type(value)
+    local value_text = trim(value)
+    if value_type ~= "number" and value_type ~= "string" then
+        return nil, render_error("invalid_segments_argument", "segments start and count must be positive integers", {
+            argument = tostring(field_name),
+            segment_index = tostring(segment_index),
+            value = tostring(value),
+            actual_type = value_type,
+        })
+    end
+
+    if value_type == "number" then
+        if value ~= math.floor(value) or value < 1 or value > MAX_SAFE_RULE_INTEGER then
+            return nil, render_error("invalid_segments_argument", "segments start and count must be positive safe integers", {
+                argument = tostring(field_name),
+                segment_index = tostring(segment_index),
+                value = tostring(value),
+                max = MAX_SAFE_RULE_INTEGER_TEXT,
+            })
+        end
+        return math.floor(value), nil
+    end
+
+    if not value_text:match("^%d+$") then
+        return nil, render_error("invalid_segments_argument", "segments start and count must be positive integers", {
+            argument = tostring(field_name),
+            segment_index = tostring(segment_index),
+            value = value_text,
+            actual_type = value_type,
+        })
+    end
+
+    local normalized_text = value_text:gsub("^0+", "")
+    if normalized_text == "" then
+        normalized_text = "0"
+    end
+    if #normalized_text > 16 then
+        return nil, render_error("invalid_segments_argument", "segments integer is too large to be represented safely", {
+            argument = tostring(field_name),
+            segment_index = tostring(segment_index),
+            value = value_text,
+            max = MAX_SAFE_RULE_INTEGER_TEXT,
+        })
+    end
+
+    local number_value = tonumber(normalized_text)
+    if not number_value or number_value < 1 or number_value > MAX_SAFE_RULE_INTEGER then
+        return nil, render_error("invalid_segments_argument", "segments start and count must be positive safe integers", {
+            argument = tostring(field_name),
+            segment_index = tostring(segment_index),
+            value = value_text,
+            max = MAX_SAFE_RULE_INTEGER_TEXT,
+        })
+    end
     return math.floor(number_value), nil
 end
 
@@ -314,6 +376,33 @@ local function parse_rule_segment(segment, segment_index)
     }, nil
 end
 
+-- Parse one structured `{ start, count }` segment object into one read request.
+-- 将一个结构化 `{ start, count }` 片段对象解析为单个读取请求。
+local function parse_structured_segment(segment, segment_index)
+    if type(segment) ~= "table" then
+        return nil, render_error("invalid_segments_argument", "each segments item must be an object with start and count", {
+            segment_index = tostring(segment_index),
+            actual_type = type(segment),
+        })
+    end
+
+    local start_line, start_error = parse_segment_integer(segment.start, "start", segment_index)
+    if start_error then
+        return nil, start_error
+    end
+    local line_count, count_error = parse_segment_integer(segment.count, "count", segment_index)
+    if count_error then
+        return nil, count_error
+    end
+
+    return {
+        start_line = start_line,
+        requested_count = line_count,
+        segment = string.format("%d,%d", start_line, line_count),
+        segment_index = segment_index,
+    }, nil
+end
+
 -- Parse a full lines_rule value into ordered read requests.
 -- 将完整 lines_rule 值解析为按顺序执行的读取请求。
 local function parse_lines_rule(lines_rule)
@@ -348,18 +437,75 @@ local function parse_lines_rule(lines_rule)
     return requests, nil
 end
 
--- Build display ranges from one or more start,count rule segments.
--- 根据一个或多个 start,count 规则片段构造展示行范围。
-local function resolve_display_ranges(args, lines)
-    local line_count = #lines
+-- Parse the preferred structured `segments` array into ordered read requests.
+-- 将首选的结构化 `segments` 数组解析为有序读取请求。
+local function parse_segments(segments)
+    if type(segments) ~= "table" then
+        return nil, render_error("invalid_segments_argument", "segments must be an array of {start, count} objects", {
+            actual_type = type(segments),
+        })
+    end
+
+    local requests = {}
+    local segment_count = 0
+    for segment_index, segment in ipairs(segments) do
+        segment_count = segment_count + 1
+        local request, segment_error = parse_structured_segment(segment, segment_index)
+        if segment_error then
+            return nil, segment_error
+        end
+        table.insert(requests, request)
+    end
+
+    if segment_count == 0 then
+        if next(segments) ~= nil then
+            return nil, render_error("invalid_segments_argument", "segments must be an array of {start, count} objects", {
+                actual_type = "table",
+            })
+        end
+        return nil, render_error("invalid_segments_argument", "segments must contain at least one range object")
+    end
+    return requests, nil
+end
+
+-- Resolve range selection from structured segments, legacy lines_rule, or the default budget rule.
+-- 从结构化 segments、旧版 lines_rule 或默认预算规则中解析展示范围选择。
+local function resolve_range_requests(args)
+    local has_segments = args.segments ~= nil
+    local has_lines_rule = args.lines_rule ~= nil and trim(args.lines_rule) ~= ""
+    if has_segments and has_lines_rule then
+        return nil, true, render_error("conflicting_range_arguments", "segments and lines_rule cannot be provided together", {
+            preferred = "segments",
+        })
+    end
+
+    if has_segments then
+        local requests, segments_error = parse_segments(args.segments)
+        if segments_error then
+            return nil, true, segments_error
+        end
+        return requests, true, nil
+    end
+
     local lines_rule, explicit_rule, input_error = resolve_lines_rule_input(args)
     if input_error then
-        return nil, input_error
+        return nil, explicit_rule, input_error
     end
 
     local requests, parse_error = parse_lines_rule(lines_rule)
     if parse_error then
-        return nil, parse_error
+        return nil, explicit_rule, parse_error
+    end
+    return requests, explicit_rule, nil
+end
+
+-- Build display ranges from one or more start,count rule segments.
+-- 根据一个或多个 start,count 规则片段构造展示行范围。
+local function resolve_display_ranges(args, lines)
+    local line_count = #lines
+    local requests, explicit_rule, request_error = resolve_range_requests(args)
+    if request_error then
+        return nil, request_error
     end
 
     if line_count == 0 then

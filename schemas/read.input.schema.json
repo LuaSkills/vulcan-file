@@ -1,0 +1,46 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "file": {
+      "type": "string",
+      "description": "Use the file path you already selected. Supports ${env:NAME} placeholders. Passing a directory is only for a quick direct-child Name listing; use vulcan-file-list for recursive discovery."
+    },
+    "segments": {
+      "type": "array",
+      "description": "Preferred structured line-range input. Each item uses a 1-based start line and a positive count. Omit this field to read from the file start using the host file-read budget. Do not pass this field together with lines_rule.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based first line to read for this segment."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of lines to read starting from start."
+          }
+        },
+        "required": [
+          "start",
+          "count"
+        ]
+      }
+    },
+    "lines_rule": {
+      "type": "string",
+      "description": "Legacy fallback for clients that cannot send arrays. Use LF newline-separated start,count segments such as \"5,10\\n25,30\". Omit this field when segments is provided."
+    },
+    "numbered": {
+      "type": "boolean",
+      "description": "Keep true when you will cite or edit by line number. Set false only when raw text lines without L<number>: prefixes are more useful; the metadata header and multi-segment separators still remain."
+    }
+  },
+  "required": [
+    "file"
+  ]
+}

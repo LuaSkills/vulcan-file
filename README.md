@@ -109,14 +109,26 @@ Ignore handling is not a full Git ignore engine; complex escapes and some advanc
 
 Use this after the file path and approximate line area are already known.
 
-Its core argument is `lines_rule`, using `start,count` format:
+Prefer the structured `segments` array when the client supports full JSON Schema:
+
+```json
+{
+  "file": "src/example.lua",
+  "segments": [
+    { "start": 5, "count": 10 },
+    { "start": 25, "count": 30 }
+  ]
+}
+```
+
+Each segment reads `count` lines starting from the 1-based `start` line. Multi-segment reads are rendered in request order, and overlapping ranges are not merged implicitly.
+
+`lines_rule` remains available as a legacy fallback for clients that cannot send arrays. It still uses `start,count` format:
 
 ```text
 5,10
 25,30
 ```
-
-This reads 10 lines starting at line 5, then 30 lines starting at line 25. Multi-segment reads are rendered in request order, and overlapping ranges are not merged implicitly.
 
 In JSON arguments, separate multiple segments with `\n` inside the string:
 
@@ -127,7 +139,7 @@ In JSON arguments, separate multiple segments with `\n` inside the string:
 }
 ```
 
-The separator is a real newline in the JSON string, not the literal word `"newline"`.
+The separator is a real newline in the JSON string, not the literal word `"newline"`. Do not send `segments` and `lines_rule` together; when the client supports array schemas, prefer `segments`.
 
 The result includes:
 
@@ -144,10 +156,12 @@ By default, it keeps stable prefixes such as `L12:` so later review comments, ci
 Boundary behavior is explicit:
 
 - `start` and `count` must be positive integers.
+- `segments` must be a non-empty array and each item must contain positive-integer `start` and `count` fields.
 - A `start` beyond the total line count returns a parameter error.
 - A `count` that extends past EOF is clipped and marked in the header.
 - Omitting `lines_rule` reads the beginning of the file using the host `file_read` budget, with a 200-line fallback when the host provides no budget.
 - A literal `"newline"` token in `lines_rule` returns `invalid_lines_rule`; use `\n` in the JSON string instead.
+- Sending both `segments` and `lines_rule` returns `conflicting_range_arguments`.
 - Directory paths are only for a quick direct-child name listing; recursive discovery belongs in `vulcan-file-list`.
 - Path values may include `${env:NAME}` placeholders, which are expanded with Lua `os.getenv` before filesystem access.
 
@@ -257,6 +271,7 @@ This is not shell functionality with a different name. It is a small protocol th
 This repository is the standalone source repository for the `vulcan-file` LuaSkill package. It maps to the published skill package used by the LuaSkills runtime:
 
 - `runtime/`: LuaSkill tool entries
+- `schemas/`: AI-facing input schema files
 - `help/`: strict help flows and per-tool guidance
 - `overflow_templates/`: reserved local overflow-template directory
 - `resources/`: reserved resource directory
@@ -302,7 +317,7 @@ Recommended local release steps:
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.2
+.\scripts\tag_release.ps1 0.1.3
 ```
 
 Unix-like shell:
@@ -310,7 +325,7 @@ Unix-like shell:
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.2
+./scripts/tag_release.sh 0.1.3
 ```
 
 ## One-Sentence Summary

@@ -107,14 +107,26 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 当文件路径和大致行号已经明确后，用它读取精确原文。
 
-它的核心参数是 `lines_rule`，格式是 `start,count`：
+如果客户端支持完整 JSON Schema，优先使用结构化 `segments` 数组：
+
+```json
+{
+  "file": "src/example.lua",
+  "segments": [
+    { "start": 5, "count": 10 },
+    { "start": 25, "count": 30 }
+  ]
+}
+```
+
+这表示从第 5 行读取 10 行，再从第 25 行读取 30 行。多段读取会按请求顺序输出，不会擅自合并重叠区间。
+
+`lines_rule` 仍保留为不能发送数组参数的客户端提供旧版兼容，格式是 `start,count`：
 
 ```text
 5,10
 25,30
 ```
-
-这表示从第 5 行读取 10 行，再从第 25 行读取 30 行。多段读取会按请求顺序输出，不会擅自合并重叠区间。
 
 在 JSON 参数中，多段规则必须使用字符串里的 `\n` 分隔：
 
@@ -125,7 +137,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 }
 ```
 
-这里的分隔符是真实换行符，不是字面字符串 `"newline"`。
+这里的分隔符是真实换行符，不是字面字符串 `"newline"`。`segments` 与 `lines_rule` 不能同时传；只要客户端支持数组 schema，就应优先使用 `segments`。
 
 它会返回：
 
@@ -142,10 +154,12 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 边界行为也很明确：
 
 - `start` 与 `count` 必须是正整数
+- `segments` 必须是非空数组，且每一项都要提供正整数 `start` 与 `count`
 - `start` 超过文件总行数时返回参数错误
 - `count` 超过文件尾部时自动截到 EOF，并在 header 中标记
 - 不传 `lines_rule` 时读取文件开头，行数来自宿主 `file_read` 预算；宿主未提供预算时默认 200 行
 - `lines_rule` 中出现字面字符串 `"newline"` 会返回 `invalid_lines_rule`，需要改为 JSON 字符串中的 `\n`
+- 同时传 `segments` 与 `lines_rule` 会返回 `conflicting_range_arguments`
 - 目录路径只用于快速查看直接子项名称，递归找文件应使用 `vulcan-file-list`
 - 路径值可以包含 `${env:NAME}` 占位符，工具会在访问文件系统前用 Lua `os.getenv` 展开
 
@@ -255,6 +269,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 当前仓库是 `vulcan-file` LuaSkill 的独立源码仓库，内容对应 LuaSkills 运行时中的正式 skill 包：
 
 - `runtime/`：LuaSkill 工具入口
+- `schemas/`：面向 AI 的输入 schema 文件
 - `help/`：严格帮助流与各工具说明
 - `overflow_templates/`：预留的本地超限模板目录
 - `resources/`：预留资源目录
@@ -300,7 +315,7 @@ python .\scripts\package_skill.py --emit-source-yaml
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.2
+.\scripts\tag_release.ps1 0.1.3
 ```
 
 Unix-like shell：
@@ -308,7 +323,7 @@ Unix-like shell：
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.2
+./scripts/tag_release.sh 0.1.3
 ```
 
 ## 一句话总结

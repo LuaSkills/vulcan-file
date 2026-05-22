@@ -91,6 +91,7 @@ def collect_package_paths(root: Path) -> list[Path]:
         "README.zh-CN.md",
         "LICENSE",
         "runtime",
+        "schemas",
         "help",
         "overflow_templates",
         "resources",
