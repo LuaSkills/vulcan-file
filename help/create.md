@@ -1,6 +1,6 @@
 # `vulcan-file-create`
 
-Use this tool when you want to create one file that does not exist yet, or a small batch of brand-new files, and you want a preview before writing.
+Use this tool when you want to create one file that does not exist yet, or a small batch of brand-new files, with an optional preview-only mode.
 
 Good fits:
 
@@ -23,7 +23,7 @@ Parameter choices:
 - Batch mode: send `files` as an array of `{ "file": "...", "content": "..." }` objects.
 - Batch mode accepts at most 10 items.
 - Root-level `PWD` is optional. When it points to an existing directory, relative `file` values resolve from that root; otherwise every `file` must already be absolute.
-- `apply=false` by default, so the tool returns only a preview. The files are written only when `apply=true` is passed explicitly, and in batch mode that one flag applies to every item.
+- `no_apply=false` by default, so the tool writes immediately. Pass `no_apply=true` only when you need a preview without writing, and in batch mode that one flag applies to every item.
 
 Boundary behavior:
 

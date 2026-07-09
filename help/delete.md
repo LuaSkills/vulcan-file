@@ -1,11 +1,13 @@
 # `vulcan-file-delete`
 
-Use this tool when you want to preview and remove one regular file or a small batch of regular files, and the host should receive explicit delete metadata when supported.
+Use this tool when you want to remove or preview one regular file or a small batch of regular files, and the host should receive explicit delete metadata when supported.
+
+Because deletion is destructive, previewing with `no_apply=true` before deleting is recommended.
 
 Good fits:
 
 - The target path already points to one regular file.
-- You want a preview before deleting.
+- You want either an immediate delete or a preview-only delete result.
 - The host should receive structured `change_set` delete records when supported.
 - The `file` path may use `${env:NAME}` placeholders.
 - Batch mode should delete at most 10 regular files in one call.
@@ -22,7 +24,7 @@ Parameter choices:
 - Batch mode: send `files` as an array of `{ "file": "..." }` objects.
 - Batch mode accepts at most 10 items.
 - Root-level `PWD` is optional. When it points to an existing directory, relative `file` values resolve from that root; otherwise every `file` must already be absolute.
-- `apply=false` by default, so the tool returns only a preview. The files are deleted only when `apply=true` is passed explicitly, and in batch mode that one flag applies to every item.
+- `no_apply=false` by default, so the tool deletes immediately. Pass `no_apply=true` only when you need a preview without deleting, and in batch mode that one flag applies to every item.
 
 Boundary behavior:
 

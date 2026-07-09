@@ -1,7 +1,7 @@
 --[[
 vulcan-file-delete
-Preview or delete one or more regular files with explicit directory rejection and optional host change_set output.
-以显式拒绝目录和可选宿主 change_set 输出预览或删除一个或多个普通文件。
+Delete or preview one or more regular files with explicit directory rejection, no_apply preview control, and optional host change_set output.
+以显式拒绝目录、no_apply 预览控制和可选宿主 change_set 输出删除或预览一个或多个普通文件。
 ]]
 
 -- Visible Markdown title used for delete error payloads.
@@ -28,6 +28,7 @@ local PARAMETER_ERROR_CODES = {
     environment_variable_not_found = true,
     invalid_environment_variable_reference = true,
     invalid_apply_argument = true,
+    invalid_no_apply_argument = true,
     file_not_found = true,
     directory_delete_unsupported = true,
 }
@@ -87,12 +88,12 @@ end
 -- Parameters:
 --     helpers: Shared helper table.
 --     request: Raw single-file request table.
---     apply: Shared apply flag inherited from the root request.
+--     no_apply: Shared preview-only flag inherited from the root request.
 --     pwd_root: Valid absolute `PWD` directory root shared by the whole call, or nil.
 -- 参数：
 --     helpers：共享辅助表。
 --     request：原始单文件请求表。
---     apply：从根请求继承的统一 apply 标记。
+--     no_apply：从根请求继承的统一仅预览标记。
 --     pwd_root：整个调用共享的有效绝对 `PWD` 目录根路径，或 nil。
 --
 -- Returns:
@@ -101,7 +102,7 @@ end
 -- 返回值：
 --     table|nil：成功时返回规范化后的删除请求。
 --     string|nil：失败时返回 Markdown 错误文本。
-local function validate_single_request(helpers, request, apply, pwd_root)
+local function validate_single_request(helpers, request, no_apply, pwd_root)
     if type(request) ~= "table" then
         return nil, render_error(helpers, "invalid_files_argument", "each files item must be an object with file", {
             actual_type = type(request),
@@ -118,7 +119,7 @@ local function validate_single_request(helpers, request, apply, pwd_root)
 
     return {
         file = file_path,
-        apply = apply == true,
+        no_apply = no_apply == true,
     }, nil
 end
 
@@ -142,10 +143,20 @@ end
 --     string|nil：失败时返回 Markdown 错误文本。
 local function collect_requests(helpers, args)
     local request = type(args) == "table" and args or {}
-    local apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, request.apply, "apply")
-    if apply_error then
-        return nil, nil, apply_error
+    if request.apply ~= nil then
+        return nil, nil, render_error(helpers, "invalid_apply_argument", "apply is no longer supported; use no_apply=true to preview without deleting")
     end
+
+    -- Validate the preview-only flag before any path or file work happens.
+    -- 在执行任何路径或文件处理前校验仅预览标记。
+    local no_apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, request.no_apply, "no_apply")
+    if no_apply_error then
+        return nil, nil, no_apply_error
+    end
+
+    -- A true no_apply value requests preview-only behavior; omitted or false deletes by default.
+    -- no_apply 为 true 时请求仅预览；省略或为 false 时默认删除。
+    local no_apply = request.no_apply == true
 
     local pwd_root, pwd_error = helpers.resolve_pwd_root(ERROR_TITLE, PARAMETER_ERROR_CODES, request.PWD)
     if pwd_error then
@@ -164,7 +175,18 @@ local function collect_requests(helpers, args)
         end
         local normalized = {}
         for index, item in ipairs(files) do
-            local item_request, item_error = validate_single_request(helpers, item, request.apply == true, pwd_root)
+            if item.apply ~= nil then
+                return nil, true, render_error(helpers, "invalid_apply_argument", "apply is no longer supported; use root-level no_apply=true to preview without deleting", {
+                    file_index = tostring(index),
+                })
+            end
+            if item.no_apply ~= nil then
+                return nil, true, render_error(helpers, "invalid_no_apply_argument", "no_apply is root-level only in batch mode", {
+                    file_index = tostring(index),
+                })
+            end
+
+            local item_request, item_error = validate_single_request(helpers, item, no_apply, pwd_root)
             if item_error then
                 return nil, true, render_error(helpers, "invalid_files_argument", "one files item is invalid", {
                     file_index = tostring(index),
@@ -175,7 +197,7 @@ local function collect_requests(helpers, args)
         return normalized, true, nil
     end
 
-    local single_request, validation_error = validate_single_request(helpers, request, request.apply == true, pwd_root)
+    local single_request, validation_error = validate_single_request(helpers, request, no_apply, pwd_root)
     if validation_error then
         return nil, false, validation_error
     end
@@ -344,7 +366,7 @@ local function render_single_result(helpers, operation)
     local lines = {
         "# " .. RESULT_TITLE,
         "",
-        "- status: `" .. (operation.request.apply and "APPLIED" or "PREVIEW_ONLY") .. "`",
+        "- status: `" .. (operation.request.no_apply and "PREVIEW_ONLY" or "APPLIED") .. "`",
         "- file: `" .. operation.request.file .. "`",
         "- content_type: `" .. tostring(operation.inspection.content_type or "text") .. "`",
         "- removed_lines: `" .. tostring(removed_lines) .. "`",
@@ -484,7 +506,9 @@ return function(args)
         table.insert(operations, operation)
     end
 
-    local apply = requests[1] and requests[1].apply == true
+    -- Default to deleting unless the caller explicitly requested preview-only behavior.
+    -- 除非调用方显式请求仅预览，否则默认删除。
+    local apply = not (requests[1] and requests[1].no_apply == true)
     if apply then
         local delete_error = apply_operations(helpers, operations)
         if delete_error then

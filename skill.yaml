@@ -1,5 +1,5 @@
 name: vulcan-file
-version: 0.1.8
+version: 0.1.9
 debug: false
 help:
   main:
@@ -7,7 +7,7 @@ help:
     file: help/help.md
   topics:
     - name: create
-      description: Create one or more brand-new files with preview-first behavior.
+      description: Create one or more brand-new files, with no_apply=true available for preview-only behavior.
       file: help/create.md
     - name: read
       description: Read one or more raw text snippets, or batch multiple known file reads in one call.
@@ -16,14 +16,14 @@ help:
       description: Find candidate files cheaply before reading them.
       file: help/list.md
     - name: edit
-      description: Make one or more small preview-first text edits after target lines have been inspected.
+      description: Make one or more small text edits after target lines have been inspected, with no_apply=true available for preview-only behavior.
       file: help/edit.md
     - name: delete
       description: Preview and delete one or more regular files without supporting directory removal.
       file: help/delete.md
 entries:
   - name: create
-    description: "[AI FILE CREATE] Use when you want to create one brand-new file or up to 10 brand-new files with preview-first semantics. It errors when a target file already exists and returns a host change_set when supported."
+    description: "[AI FILE CREATE] Use when you want to create one brand-new file or up to 10 brand-new files. It writes by default, supports no_apply=true for preview-only behavior, errors when a target file already exists, and returns a host change_set when supported."
     lua_entry: runtime/vulcan-file-create.lua
     lua_module: vulcan_file_create
     help: create
@@ -41,13 +41,13 @@ entries:
     help: list
     input_schema_file: schemas/list.input.schema.json
   - name: edit
-    description: "[AI FILE EDIT] Use for small text edits after you have read the target lines. It supports single-file edits or up to 10 batch edits, previews by default, and should receive apply=true only after the preview matches the intended change."
+    description: "[AI FILE EDIT] Use for small text edits after you have read the target lines. It supports single-file edits or up to 10 batch edits, writes by default, and supports no_apply=true for preview-only behavior."
     lua_entry: runtime/vulcan-file-edit.lua
     lua_module: vulcan_file_edit
     help: edit
     input_schema_file: schemas/edit.input.schema.json
   - name: delete
-    description: "[AI FILE DELETE] Use to preview and delete one regular file or up to 10 regular files. It rejects directories explicitly, previews by default, and returns a host change_set when supported."
+    description: "[AI FILE DELETE] Use to delete or preview one regular file or up to 10 regular files. It rejects directories explicitly, deletes by default, recommends no_apply=true previews before deletion, and returns a host change_set when supported."
     lua_entry: runtime/vulcan-file-delete.lua
     lua_module: vulcan_file_delete
     help: delete

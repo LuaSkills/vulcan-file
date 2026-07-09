@@ -91,9 +91,9 @@
         ]
       }
     },
-    "apply": {
+    "no_apply": {
       "type": "boolean",
-      "description": "Leave false for preview. Set true only when the previewed edit is ready to write. In batch mode this apply flag is shared by all files."
+      "description": "Leave false or omit to write edits immediately. Set true only when you need a preview without writing. In batch mode this no_apply flag is shared by all files."
     }
   },
   "oneOf": [

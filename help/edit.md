@@ -6,7 +6,7 @@ Good fits:
 
 - You already inspected the target context with `vulcan-file-read`.
 - You only need to overwrite, append, replace one line range, or insert before or after one existing line.
-- You want a preview before deciding whether to write.
+- You want either an immediate write or a preview-only edit result.
 - The host should receive structured `change_set` edit records when supported.
 - The `file` path may use `${env:NAME}` placeholders.
 - Batch mode should edit at most 10 files in one call.
@@ -32,7 +32,7 @@ Parameter choices:
 - Batch mode: send `files` as an array of edit objects. Each item can carry its own `mode`, `content`, `start_line`, `end_line`, or `line`.
 - Batch mode accepts at most 10 items.
 - Root-level `PWD` is optional. When it points to an existing directory, relative `file` values resolve from that root; otherwise every `file` must already be absolute.
-- `apply=false` by default, so the tool returns only a preview diff. The files are written only when `apply=true` is passed explicitly, and in batch mode that one flag applies to every item.
+- `no_apply=false` by default, so the tool writes immediately. Pass `no_apply=true` only when you need a preview diff without writing, and in batch mode that one flag applies to every item.
 
 Boundary behavior:
 

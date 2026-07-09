@@ -11,7 +11,7 @@ It is not solving the basic question of whether files can be read. It solves the
 - Avoid writing platform-specific shell snippets just to list files.
 - Read a precise slice after the target file and line area are known.
 - Read multiple non-adjacent snippets in one call for comparison.
-- Make a small text edit only after seeing a preview.
+- Make a small text edit directly, or request a preview-only result first.
 - Avoid wasting context budget on generated files, dependency directories, and ignored paths.
 
 The current LuaSkills naming model uses the canonical `skill_id-entry_name` form, so the recommended tool names are:
@@ -28,13 +28,13 @@ It is closer to a small text-file workbench built for agents and automated engin
 
 - First shrink the candidate set with a low-token file map.
 - Then read raw text with explicit line numbers when the file already exists.
-- Then preview new files with `create` or small changes with `edit`.
-- Then preview regular-file removals with `delete` when lifecycle cleanup is needed.
-- Finally apply only when the preview matches the intended change.
+- Then create new files or make small edits once the target context is confirmed.
+- Then preview regular-file removals with `delete no_apply=true` before deleting when lifecycle cleanup is needed.
+- Use `no_apply=true` whenever a reviewable preview should happen before the write.
 
 In one sentence:
 
-**Find the file, read the evidence, preview the create, edit, or delete step, then apply.**
+**Find the file, read the evidence, then create, edit, or delete; pass `no_apply=true` when a preview should come first.**
 
 Path convention:
 
@@ -58,7 +58,7 @@ In agent workflows, the missing piece is not more raw capability. It is a more s
 - Stable line numbers for citations and later edits.
 - Clear parameter errors that can be corrected automatically.
 - Ignore-aware defaults that reduce context pollution.
-- Preview-first editing to avoid accidental writes.
+- Optional preview-only controls for higher-risk writes.
 
 `Vulcan File` fills that gap:
 
@@ -67,7 +67,7 @@ In agent workflows, the missing piece is not more raw capability. It is a more s
 - It does not only dump whole files into context.
 - It cares about returning line-addressable raw evidence.
 - It does not only write files.
-- It cares about producing an auditable preview before an explicit write.
+- It cares about producing auditable previews when requested and structured results when writes execute.
 
 ## Boundary With CodeKit
 
@@ -184,7 +184,7 @@ This is not a tool for guessing through pages. If the text location is unknown, 
 
 ### `vulcan-file-create`
 
-Use this when you need to create one brand-new file or a small batch of brand-new files and want preview-first behavior instead of writing immediately.
+Use this when you need to create one brand-new file or a small batch of brand-new files, with an optional preview-only mode.
 
 Typical fits:
 
@@ -199,23 +199,23 @@ Typical parameters:
 - `file`: exact target file path; `${env:NAME}` placeholders are supported.
 - `content`: complete content of the new file; `""` is allowed and creates an empty file.
 - `files`: optional batch form with up to 10 `{ file, content }` objects; do not send it together with root `file`/`content`.
-- `apply`: leave false for preview, set true only when the preview is correct.
+- `no_apply`: leave false or omit to create immediately; set true only when you need a preview without writing.
 
 Boundary behavior is explicit:
 
 - Existing targets return `file_already_exists`; they are never overwritten silently.
 - Missing parent directories return `parent_directory_not_found`.
 - Parent paths that exist but are not directories return `parent_path_not_directory`.
-- Preview output shows the creation as a plus-only diff block and is truncated after 80 preview lines.
-- Batch mode accepts at most 10 items, and one `apply` flag controls the whole batch.
+- Result output shows the creation as a plus-only diff block and is truncated after 80 preview lines.
+- Batch mode accepts at most 10 items, and one `no_apply` flag controls the whole batch.
 
 ### `vulcan-file-edit`
 
 Use this for small text edits after the target file and target lines have been confirmed.
 
-It supports one root-level edit request or a `files` batch of up to 10 items. Batch mode is useful when several known files need coordinated preview-first text changes in one call.
+It supports one root-level edit request or a `files` batch of up to 10 items. Batch mode is useful when several known files need coordinated text changes in one call.
 
-It previews by default and does not write. A write only happens when `apply=true` is passed explicitly.
+It writes by default. Pass `no_apply=true` only when you need a preview without writing.
 
 The root `PWD` parameter may point to the current project or workspace root. When `PWD` is valid, relative `file` values resolve from it; otherwise `file` must already be absolute. `${env:NAME}` placeholders are still expanded with Lua `os.getenv` before filesystem access.
 
@@ -227,6 +227,7 @@ Supported modes:
 - `insert_before`: insert before an existing 1-based anchor line.
 - `insert_after`: insert after an existing 1-based anchor line.
 - `files`: optional batch form with up to 10 per-file edit objects; do not send it together with root single-file edit arguments.
+- `no_apply`: leave false or omit to write immediately; set true only when you need a preview without writing.
 
 `insert_before` and `insert_after` require `1 <= line <= total_lines`. Out-of-range anchors return `line_out_of_bounds`; they do not silently append. For empty files, use `overwrite` to create content or `append` for file-end additions.
 
@@ -244,14 +245,16 @@ It deliberately avoids complex structural reasoning. Use `vulcan-codekit-patch` 
 
 ### `vulcan-file-delete`
 
-Use this when you need to preview and remove one regular file or a small batch of regular files, and the host should receive canonical delete metadata when supported.
+Use this when you need to remove or preview one regular file or a small batch of regular files, and the host should receive canonical delete metadata when supported.
+
+Because deletion is destructive, previewing with `no_apply=true` before deleting is recommended.
 
 Typical parameters:
 
 - `file`: exact regular-file path to remove; `${env:NAME}` placeholders are supported.
 - `PWD`: optional shared project or workspace root. Relative `file` values are resolved from `PWD` when it points to an existing directory; otherwise `file` must already be absolute.
 - `files`: optional batch form with up to 10 `{ file }` objects; do not send it together with root `file`.
-- `apply`: leave false for preview, set true only when the preview is correct.
+- `no_apply`: leave false or omit to delete immediately; set true only when you need a preview without deleting.
 
 Boundary behavior is explicit:
 
@@ -274,8 +277,8 @@ Instead:
 
 1. Use `list` to get a candidate file map.
 2. Use `read` to inspect exact target lines when the file already exists.
-3. Use `create` to preview brand-new files, `edit` to preview small changes to existing files, or `delete` to preview regular-file removal.
-4. Use `create apply=true`, `edit apply=true`, or `delete apply=true` only after the preview is correct.
+3. Use `create` for brand-new files, `edit` for small changes to existing files, or `delete no_apply=true` to preview regular-file removal.
+4. After a delete preview is correct, rerun `delete` without `no_apply`; pass `no_apply=true` for create or edit only when a preview is needed before writing.
 
 In other words:
 
@@ -288,7 +291,7 @@ This is especially useful for:
 - Small edits to README files, configuration files, scripts, and plain text assets
 - Review or repair work that needs precise line-number evidence
 - Agents that need to conserve context budget
-- Workflows where invisible default writes are unacceptable
+- Workflows that need explicit preview-only controls for higher-risk writes
 
 ## A Practical Comparison
 
@@ -307,7 +310,7 @@ Those commands work, but each call requires a fresh decision:
 - Should ignore rules be respected?
 - Will the output be too long?
 - Can the line format be cited directly?
-- Is there a clear enough preview before editing?
+- Should this operation use `no_apply=true` for a preview first?
 
 With `Vulcan File`, these concerns are organized into four stable entries:
 
@@ -324,7 +327,7 @@ This is not shell functionality with a different name. It is a small protocol th
 - Platforms adding a basic file-operation layer to MCP tooling
 - Local agent runtimes that need stable cross-platform file behavior
 - Automated workflows that frequently touch README, config, script, and resource files
-- Engineering teams that want preview-first editing as the default discipline
+- Engineering teams that want explicit preview controls around file writes
 
 ## Included Tools
 

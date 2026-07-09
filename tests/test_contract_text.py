@@ -93,7 +93,7 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.8")
+    assert_contains(skill_yaml, "version: 0.1.9")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
@@ -103,7 +103,7 @@ def test_skill_manifest_contract() -> None:
     create_schema = read_text("schemas/create.input.schema.json")
     assert_contains(create_schema, '"PWD"')
     assert_contains(create_schema, '"content"')
-    assert_contains(create_schema, '"apply"')
+    assert_contains(create_schema, '"no_apply"')
     assert_contains(create_schema, '"files"')
     assert_contains(create_schema, '"maxItems": 10')
 
@@ -121,13 +121,16 @@ def test_skill_manifest_contract() -> None:
     edit_schema = read_text("schemas/edit.input.schema.json")
     assert_contains(edit_schema, '"PWD"')
     assert_contains(edit_schema, '"files"')
+    assert_contains(edit_schema, '"no_apply"')
     assert_contains(edit_schema, '"maxItems": 10')
 
     delete_schema = read_text("schemas/delete.input.schema.json")
     assert_contains(delete_schema, '"PWD"')
     assert_contains(delete_schema, '"files"')
+    assert_contains(delete_schema, '"no_apply"')
     assert_contains(delete_schema, '"maxItems": 10')
     assert_contains(delete_schema, 'Directory paths are rejected')
+    assert_contains(delete_schema, 'previewing with no_apply=true before deletion is recommended')
 
 
 """
@@ -159,13 +162,19 @@ def test_runtime_guardrails() -> None:
     assert_contains(edit_runtime, "line_out_of_bounds")
     assert_contains(edit_runtime, "conflicting_batch_arguments")
     assert_contains(edit_runtime, "invalid_pwd_argument")
+    assert_contains(edit_runtime, "invalid_no_apply_argument")
+    assert_contains(edit_runtime, "apply is no longer supported")
     assert_contains(create_runtime, "file_already_exists")
     assert_contains(create_runtime, "parent_directory_not_found")
     assert_contains(create_runtime, "conflicting_batch_arguments")
     assert_contains(create_runtime, "invalid_pwd_argument")
+    assert_contains(create_runtime, "invalid_no_apply_argument")
+    assert_contains(create_runtime, "apply is no longer supported")
     assert_contains(delete_runtime, "directory delete is not supported")
     assert_contains(delete_runtime, "directory_delete_unsupported")
     assert_contains(delete_runtime, "invalid_pwd_argument")
+    assert_contains(delete_runtime, "invalid_no_apply_argument")
+    assert_contains(delete_runtime, "apply is no longer supported")
     assert_contains(shared_runtime, 'kind = "change_set"')
     assert_contains(shared_runtime, "allows_change_set")
     assert_contains(shared_runtime, "max_payload_bytes")
@@ -233,6 +242,9 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "PWD")
     assert_contains(docs, "must already be absolute")
     assert_contains(docs, "必须本身就是绝对路径")
+    assert_contains(docs, "no_apply=true")
+    assert_contains(docs, "previewing with `no_apply=true` before deleting is recommended")
+    assert_contains(docs, "删除是破坏性操作")
 
 
 """
