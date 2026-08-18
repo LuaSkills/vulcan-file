@@ -589,24 +589,49 @@ end
 
 -- Validate final content with validators that are reliable for the file type.
 -- 使用对目标文件类型可靠的校验器验证最终内容。
+--
+-- Return only one bounded diagnostic line so callers do not nest a complete Markdown error block.
+-- 只返回一条有长度上限的诊断行，避免调用方再次嵌套完整 Markdown 错误块。
+--
+-- Parameters:
+--     helpers: Shared file helpers providing trim.
+--     value: Raw decoder error value.
+-- 参数：
+--     helpers：提供 trim 的共享文件辅助表。
+--     value：解码器返回的原始错误值。
+--
+-- Returns:
+--     string: One-line, Markdown-safe, bounded diagnostic detail.
+-- 返回值：
+--     string：单行、Markdown 安全且有长度上限的诊断详情。
+local function compact_error_detail(helpers, value)
+    local text = tostring(value or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+    for line in (text .. "\n"):gmatch("(.-)\n") do
+        local candidate = helpers.trim(line)
+        if candidate ~= "" then
+            candidate = candidate:gsub("`", "'")
+            if #candidate > 240 then
+                return candidate:sub(1, 237) .. "..."
+            end
+            return candidate
+        end
+    end
+    return "JSON decoder returned no diagnostic detail"
+end
+
+-- Validate final JSON content and return a concise detail for the outer error renderer.
+-- 校验最终 JSON 内容，并向外层错误渲染器返回简洁详情。
 local function validate_final_content(helpers, file_path, content)
     if tostring(file_path):lower():match("%.json$") then
         if not vulcan.json or type(vulcan.json.decode) ~= "function" then
-            return render_error(helpers, "final_content_validation_failed", "JSON validation is unavailable in the host runtime", {
-                file = file_path,
-            })
+            return "JSON validation is unavailable in the host runtime"
         end
         local ok, decoded = pcall(vulcan.json.decode, content)
         if not ok then
-            return render_error(helpers, "final_content_validation_failed", "final JSON content is invalid", {
-                file = file_path,
-                detail = tostring(decoded),
-            })
+            return "JSON decoder: " .. compact_error_detail(helpers, decoded)
         end
         if decoded == nil and content ~= "null" then
-            return render_error(helpers, "final_content_validation_failed", "final JSON content could not be decoded", {
-                file = file_path,
-            })
+            return "JSON decoder returned null for non-null content"
         end
     end
     return nil

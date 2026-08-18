@@ -56,6 +56,8 @@ The old `insert_before` and `insert_after` modes are no longer accepted. Express
 
 Results list nodes in original-line order and show both `original_range` and the final actual range. If earlier nodes changed line counts, the result explicitly lists the source node ids, each `delta`, and the cumulative shift.
 
+Multi-node previews label deleted lines with `[original]` coordinates and context or inserted lines with `[final]` coordinates. Host `change_set` hunks use original content for deletion and final content for before/after context.
+
 Node-level failures report:
 
 - committed prefix nodes with their final ranges and deltas, or staged prefix nodes when the request was preview-only;
@@ -65,6 +67,8 @@ Node-level failures report:
 - Internal staging failures use `commit_scope=none` and never write a successful prefix. Write failures report that disk state is uncertain; re-read the file before retrying.
 
 After a prefix commit, re-read the file before retrying remaining edits. Do not reuse the old line numbers or old content without checking the new disk state.
+
+Final JSON validation failures keep a single-line decoder detail; nested Markdown and stack traces are not returned inside `detail`.
 
 The optional host `change_set` result is preserved. It contains one file record with one hunk per applied or previewed node, and hunk line numbers refer to the final staged or committed content.
 

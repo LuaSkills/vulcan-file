@@ -151,12 +151,14 @@ class EditRuntimeTests(unittest.TestCase):
             self.assertIn("original `L5-L5` -> final `L6-L6`", content)
             self.assertIn("shift:", content)
             later_preview = content.split("## Preview later", 1)[1].split("## Preview tail", 1)[0]
-            self.assertIn(" L3: beta-2", later_preview)
-            self.assertIn(" L5: delta", later_preview)
+            self.assertIn(" L3 [final]: beta-2", later_preview)
+            self.assertIn(" L5 [final]: delta", later_preview)
+            self.assertIn("-L5 [original]: epsilon", later_preview)
+            self.assertIn("+L6 [final]: epsilon-new", later_preview)
             self.assertNotIn(" L2: beta", later_preview)
             tail_preview = content.split("## Preview tail", 1)[1]
-            self.assertIn(" L6: epsilon-new", tail_preview)
-            self.assertNotIn(" L5: epsilon", tail_preview)
+            self.assertIn(" L6 [final]: epsilon-new", tail_preview)
+            self.assertNotIn(" L5 [final]: epsilon", tail_preview)
             self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\ngamma\ndelta\nepsilon\n")
 
     def test_overlap_rejects_request_without_write(self) -> None:
@@ -234,6 +236,10 @@ class EditRuntimeTests(unittest.TestCase):
             hunks = host_result["payload"]["files"][0]["hunks"]
             self.assertEqual([hunk["node_id"] for hunk in hunks], ["first", "later", "tail"])
             self.assertEqual([hunk["final_range"] for hunk in hunks], ["L2-L3", "L6-L6", "L7-L7"])
+            self.assertEqual(hunks[0]["before"], "alpha")
+            self.assertEqual(hunks[1]["before"], "beta-2\ngamma\ndelta")
+            self.assertEqual(hunks[1]["after"], "zeta")
+            self.assertEqual(hunks[2]["before"], "gamma\ndelta\nepsilon-new")
             self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\ngamma\ndelta\nepsilon\n")
 
     def test_node_failure_commits_only_successful_prefix(self) -> None:
@@ -375,6 +381,9 @@ class EditRuntimeTests(unittest.TestCase):
             )
             self.assertIn("final_content_validation_failed", content)
             self.assertIn("commit_scope: `none`", content)
+            self.assertIn("- detail: `JSON decoder:", content)
+            self.assertEqual(content.count("# FILE EDIT ERROR"), 1)
+            self.assertNotIn("stack traceback", content.lower())
             self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_deletion_maps_following_original_node_to_new_range(self) -> None:

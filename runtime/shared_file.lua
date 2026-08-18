@@ -1314,6 +1314,7 @@ end
 --     prefix: Prefix such as space, plus, or minus.
 --     max_preview_lines: Maximum preview line budget.
 --     display_start_line: Optional visible first 1-based line number.
+--     coordinate_domain: Optional coordinate label such as original or final.
 -- 参数：
 --     output：需要原地追加的输出行表。
 --     rendered_count：已经渲染的行数。
@@ -1323,6 +1324,7 @@ end
 --     prefix：前缀，例如空格、加号或减号。
 --     max_preview_lines：允许的最大预览行预算。
 --     display_start_line：可选的可见首个 1-based 行号。
+--     coordinate_domain：可选的坐标域标签，例如 original 或 final。
 --
 -- Returns:
 --     number: Updated rendered line count.
@@ -1330,15 +1332,16 @@ end
 -- 返回值：
 --     number：更新后的已渲染行数。
 --     boolean：仍可继续渲染时返回 true。
-local function render_context_range(output, rendered_count, lines, start_line, end_line, prefix, max_preview_lines, display_start_line)
+local function render_context_range(output, rendered_count, lines, start_line, end_line, prefix, max_preview_lines, display_start_line, coordinate_domain)
     local safe_start = math.max(1, start_line)
     local safe_end = math.min(#lines, end_line)
     local source_base = tonumber(start_line) or safe_start
     local display_base = tonumber(display_start_line) or source_base
+    local coordinate_suffix = coordinate_domain and (" [" .. tostring(coordinate_domain) .. "]") or ""
     for line_number = safe_start, safe_end do
         local display_line_number = display_base + (line_number - source_base)
         local keep_going
-        rendered_count, keep_going = append_preview_line(output, rendered_count, string.format("%sL%d: %s", prefix, display_line_number, lines[line_number] or ""), max_preview_lines)
+        rendered_count, keep_going = append_preview_line(output, rendered_count, string.format("%sL%d%s: %s", prefix, display_line_number, coordinate_suffix, lines[line_number] or ""), max_preview_lines)
         if not keep_going then
             return rendered_count, false
         end
@@ -1383,6 +1386,7 @@ local function render_operation_preview(request_mode, request_content, original_
     local edited_start = changed_span.start_line or 1
     local edited_end = changed_span.end_line or edited_start
     local inserted_line_count = tonumber(changed_span.inserted_line_count) or 0
+    local show_coordinate_domains = context_content ~= nil
     local before_context_start = edited_start - 3
     local before_context_end = edited_start - 1
     local after_context_start = edited_start + inserted_line_count
@@ -1403,18 +1407,18 @@ local function render_operation_preview(request_mode, request_content, original_
     local preview_limit = tonumber(max_preview_lines) or DEFAULT_MAX_PREVIEW_LINES
     local rendered = 0
     local keep_going
-    rendered, keep_going = render_context_range(output, rendered, context_lines, before_context_start, before_context_end, " ", preview_limit)
+    rendered, keep_going = render_context_range(output, rendered, context_lines, before_context_start, before_context_end, " ", preview_limit, nil, show_coordinate_domains and "final" or nil)
 
     if keep_going and (request_mode == "replace_range" or request_mode == "overwrite") then
-        rendered, keep_going = render_context_range(output, rendered, original_lines, original_start, original_end, "-", preview_limit)
+        rendered, keep_going = render_context_range(output, rendered, original_lines, original_start, original_end, "-", preview_limit, nil, show_coordinate_domains and "original" or nil)
     end
 
     if keep_going and inserted_line_count > 0 then
-        rendered, keep_going = render_context_range(output, rendered, edited_lines, edited_start, edited_end, "+", preview_limit)
+        rendered, keep_going = render_context_range(output, rendered, edited_lines, edited_start, edited_end, "+", preview_limit, nil, show_coordinate_domains and "final" or nil)
     end
 
     if keep_going and request_mode ~= "append" then
-        rendered, keep_going = render_context_range(output, rendered, context_lines, after_context_start, after_context_end, " ", preview_limit)
+        rendered, keep_going = render_context_range(output, rendered, context_lines, after_context_start, after_context_end, " ", preview_limit, nil, show_coordinate_domains and "final" or nil)
     end
 
     if not keep_going then
@@ -1528,7 +1532,9 @@ local function build_modify_file_record(file_path, original_content, edited_cont
     local edited_end = changed_span.end_line or (changed_span.start_line or 1)
     local inserted_line_count = tonumber(changed_span.inserted_line_count) or 0
     local after_context_start = edited_start + inserted_line_count
-    local before_context = build_context_string(original_lines, original_start - 3, original_start - 1, newline)
+    -- Read hunk context from final coordinates while keeping deleted lines original.
+    -- 上下文按最终坐标读取，删除行仍保留原始内容，避免多节点偏移导致宿主校验失败。
+    local before_context = build_context_string(edited_lines, edited_start - 3, edited_start - 1, newline)
     local after_context = build_context_string(edited_lines, after_context_start, after_context_start + 2, newline)
     local deleted_lines = build_line_entries(original_lines, original_start, original_end)
     local inserted_lines = {}

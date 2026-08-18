@@ -234,6 +234,9 @@ The result includes:
 - Committed prefix nodes (or staged prefix nodes in preview-only results), the failed node's mapped current content, and unexecuted later nodes when a node fails
 - Internal staging failures never write a prefix; write failures require re-reading the file because disk state may be uncertain
 - Operation-oriented multi-node diff preview
+- Multi-node previews explicitly label `[original]` deletion coordinates and `[final]` context or insertion coordinates
+- Host `change_set` hunks use final-file context while retaining original deletion content
+- Final JSON validation details are compact single-line diagnostics
 - A canonical host `change_set` when structured host results are enabled by the host
 - Clear correction hints for parameter errors
 
