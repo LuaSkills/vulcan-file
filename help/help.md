@@ -13,9 +13,10 @@ Prefer these choices:
 
 Batch limits:
 
-- `create`, `read`, `edit`, and `delete` accept either one root-level file request or one `files` array.
-- Batch mode supports at most 10 items per call.
-- `no_apply` is shared by the whole batch.
+- `create`, `read`, and `delete` accept either one root-level file request or one `files` array.
+- Those batch modes support at most 10 items per call.
+- `vulcan-file-edit` accepts one file and up to 50 nodes; use its `nodes` array for multiple positions in that file.
+- `no_apply` is shared by the whole request.
 
 Avoid these choices:
 

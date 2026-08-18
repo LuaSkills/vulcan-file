@@ -1,44 +1,71 @@
 # `vulcan-file-edit`
 
-Use this tool when the target file and target lines are already confirmed and you need one small text edit or a small batch of coordinated text edits.
+Use this tool when one existing file has one or more confirmed text changes. Read the target file first with `vulcan-file-read` and copy the complete original text for every edit node.
 
-Good fits:
+The request edits exactly one file. Multiple positions in that file belong in one `nodes` array so the runtime can preserve the original line coordinates and calculate later offsets.
 
-- You already inspected the target context with `vulcan-file-read`.
-- You only need to overwrite, append, replace one line range, or insert before or after one existing line.
-- You want either an immediate write or a preview-only edit result.
-- The host should receive structured `change_set` edit records when supported.
-- The `file` path may use `${env:NAME}` placeholders.
-- Batch mode should edit at most 10 files in one call.
+## Request shape
 
-Not a good fit:
+```json
+{
+  "PWD": "/workspace/project",
+  "file": "src/example.rs",
+  "no_apply": false,
+  "nodes": [
+    {
+      "id": "replace-guard",
+      "type": "edit",
+      "start_line": 20,
+      "end_line": 24,
+      "old_content": "the complete original five lines",
+      "new_content": "the replacement lines"
+    },
+    {
+      "id": "append-helper",
+      "type": "append",
+      "new_content": "text added at the final file end"
+    }
+  ]
+}
+```
 
-- Prefer `vulcan-file-create` when you need to create one file that does not exist yet.
-- Prefer `vulcan-codekit-patch` when whole-function or whole-method replacement is needed.
-- Use `vulcan-codekit` first when source structure must be understood before editing.
-- Do not edit yet if the target lines are still uncertain; read the context first.
+`PWD` remains the optional project root for relative file paths. `no_apply=true` runs the full preview and validation flow without writing. It applies to the whole request.
 
-Supported modes:
+## Node rules
 
-- `overwrite`: replace the whole file. For backward compatibility it still allows creation when the file does not exist, but `vulcan-file-create` is now the preferred entry for brand-new files; `content=""` creates or leaves an empty file.
-- `append`: append at the end of the file; when the original file is non-empty and lacks a final newline, one file newline is inserted first so appended content starts on a new line.
-- `replace_range`: replace one existing 1-based closed line range; `content=""` deletes that range.
-- `insert_before`: insert before one existing line.
-- `insert_after`: insert after one existing line.
+- Every node needs a unique `id`.
+- An `edit` node uses the original file's 1-based inclusive `start_line` and `end_line`.
+- `old_content` must contain the complete original logical-line block, not only the word being changed.
+- The old block must occur exactly once in the original file and must match the declared original range.
+- `new_content` replaces the range. An empty `new_content` deletes the range.
+- An `append` node has only `id`, `type`, and non-empty `new_content`. It runs after all edit nodes and also works for an empty file.
+- Edit nodes are sorted by original start line before execution. Append nodes stay after edits in their request order.
+- Adjacent ranges are valid. Overlapping edit ranges reject the complete request before any write.
+- When a node's content does not match or is not unique, successful earlier nodes are committed as a prefix; the failed and later nodes are not executed.
+- Final JSON validation runs before a complete write. If it fails, the file remains unchanged.
 
-Parameter choices:
+## Insert migration
 
-- Single-file mode: send root-level `file`, `mode`, `content`, and any mode-specific line arguments.
-- Batch mode: send `files` as an array of edit objects. Each item can carry its own `mode`, `content`, `start_line`, `end_line`, or `line`.
-- Batch mode accepts at most 10 items.
-- Root-level `PWD` is optional. When it points to an existing directory, relative `file` values resolve from that root; otherwise every `file` must already be absolute.
-- `no_apply=false` by default, so the tool writes immediately. Pass `no_apply=true` only when you need a preview diff without writing, and in batch mode that one flag applies to every item.
+The old `insert_before` and `insert_after` modes are no longer accepted. Express them as a one-line `edit`:
 
-Boundary behavior:
+- Insert before an anchor: `old_content` is the anchor line; `new_content` is the inserted text, a newline, and the original anchor line.
+- Insert after an anchor: `old_content` is the anchor line; `new_content` is the original anchor line, a newline, and the inserted text.
+- Empty files have no anchor; use `append`.
 
-- Only `overwrite` still supports creating a missing file for backward compatibility; other modes return `file_not_found` when the file does not exist.
-- `append`, `insert_before`, and `insert_after` require non-empty `content` so no-op edits are not misreported as completed work.
-- `insert_before` and `insert_after` require `1 <= line <= total_lines`.
-- Empty files have no anchor lines, so insert modes return `line_out_of_bounds`; use `overwrite` to create content or `append` for file-end additions.
-- `insert_after` allows `line == total_lines`, which means insert after the last existing line; values beyond the total line count still return `line_out_of_bounds` and never append silently.
-- The preview shows at most 80 lines of changed context per file; larger previews are marked with `preview truncated`.
+## Results and failure recovery
+
+Results list nodes in original-line order and show both `original_range` and the final actual range. If earlier nodes changed line counts, the result explicitly lists the source node ids, each `delta`, and the cumulative shift.
+
+Node-level failures report:
+
+- committed prefix nodes with their final ranges and deltas, or staged prefix nodes when the request was preview-only;
+- the failed node, its mapped current range, and the actual content currently at that range;
+- later nodes that were not executed and their mapped ranges when available;
+- `commit_scope` as `none`, `prefix`, or `all`.
+- Internal staging failures use `commit_scope=none` and never write a successful prefix. Write failures report that disk state is uncertain; re-read the file before retrying.
+
+After a prefix commit, re-read the file before retrying remaining edits. Do not reuse the old line numbers or old content without checking the new disk state.
+
+The optional host `change_set` result is preserved. It contains one file record with one hunk per applied or previewed node, and hunk line numbers refer to the final staged or committed content.
+
+Use `vulcan-codekit-patch` for whole-function or whole-method replacement when structural source understanding is required.

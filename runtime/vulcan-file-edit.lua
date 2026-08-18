@@ -1,8 +1,8 @@
---[[
+--[=[
 vulcan-file-edit
-Apply or preview one or more small text edits while preserving a stable text contract and optional host change_set output.
-在保持稳定文本契约与可选宿主 change_set 输出的前提下，应用或预览一个或多个小范围文本编辑。
-]]
+Apply one-file multi-node edits with original-content guards, staged offsets, and optional host change_set output.
+使用原始内容护栏、暂存偏移和可选宿主 change_set 输出，对单个文件执行多节点编辑。
+]=]
 
 -- Visible Markdown title used for edit error payloads.
 -- 编辑错误结果使用的可见 Markdown 标题。
@@ -12,57 +12,49 @@ local ERROR_TITLE = "FILE EDIT ERROR"
 -- 编辑成功结果使用的可见 Markdown 标题。
 local RESULT_TITLE = "FILE EDIT RESULT"
 
--- Visible section title used for preview blocks.
--- 预览区块使用的可见标题。
-local PREVIEW_TITLE = "Preview"
+-- Maximum number of nodes accepted by one single-file request.
+-- 单个单文件请求允许接收的最大节点数量。
+local MAX_NODES = 50
 
--- Supported edit modes accepted by this tool.
--- 本工具接受的编辑模式集合。
-local SUPPORTED_MODES = {
-    overwrite = true,
-    append = true,
-    replace_range = true,
-    insert_before = true,
-    insert_after = true,
-}
+-- Maximum number of request-content bytes accepted before execution.
+-- 执行前允许的请求内容最大字节数。
+local MAX_REQUEST_CONTENT_BYTES = 131072
 
--- Error codes that indicate the caller passed invalid tool arguments.
--- 表示调用方传入无效工具参数的错误码集合。
+-- Maximum number of candidate ranges rendered in one uniqueness diagnostic.
+-- 单次唯一性诊断允许渲染的最大候选范围数量。
+local MAX_DIAGNOSTIC_CANDIDATES = 20
+
+-- Error codes that indicate invalid arguments or request-level rejection.
+-- 表示参数无效或请求级拒绝的错误码集合。
 local PARAMETER_ERROR_CODES = {
+    invalid_request = true,
     invalid_file = true,
-    invalid_files_argument = true,
-    too_many_files = true,
-    conflicting_batch_arguments = true,
-    invalid_pwd_argument = true,
-    relative_path_requires_pwd = true,
     file_is_directory = true,
     file_not_found = true,
-    environment_variable_not_found = true,
-    invalid_environment_variable_reference = true,
-    invalid_mode = true,
-    invalid_content = true,
-    empty_content_noop = true,
+    file_read_failed = true,
+    invalid_pwd_argument = true,
+    relative_path_requires_pwd = true,
     invalid_apply_argument = true,
     invalid_no_apply_argument = true,
+    multiple_files_not_supported = true,
+    invalid_nodes_argument = true,
+    empty_nodes = true,
+    duplicate_node_id = true,
+    too_many_nodes = true,
+    request_content_too_large = true,
+    invalid_node = true,
+    invalid_node_type = true,
+    invalid_node_fields = true,
+    invalid_edit_range = true,
     invalid_start_line_argument = true,
     invalid_end_line_argument = true,
-    invalid_line_argument = true,
-    line_out_of_bounds = true,
-    invalid_range = true,
+    edit_on_empty_file = true,
+    empty_append = true,
+    overlapping_nodes = true,
 }
 
 -- Load the shared file helper module from the current entry directory.
 -- 从当前入口目录加载共享文件辅助模块。
---
--- Parameters:
---     None.
--- 参数：
---     无。
---
--- Returns:
---     table: Shared helper table used by create and edit entries.
--- 返回值：
---     table：create 与 edit 入口共用的辅助表。
 local function load_shared_file_helpers()
     local entry_dir = tostring(vulcan.context.entry_dir or ".")
     local helper_path = vulcan.path.join(entry_dir, "shared_file.lua")
@@ -80,662 +72,831 @@ end
 
 -- Build one tool-local Markdown error payload through the shared helper.
 -- 通过共享辅助构造一个工具本地 Markdown 错误结果。
---
--- Parameters:
---     helpers: Shared helper table.
---     error_code: Stable error identifier.
---     message: Human-readable error message.
---     details: Optional key-value details rendered as bullet lines.
--- 参数：
---     helpers：共享辅助表。
---     error_code：稳定错误标识。
---     message：可读错误信息。
---     details：以项目符号行渲染的可选键值详情。
---
--- Returns:
---     string: Markdown error payload.
--- 返回值：
---     string：Markdown 错误结果文本。
 local function render_error(helpers, error_code, message, details)
     return helpers.render_error(ERROR_TITLE, PARAMETER_ERROR_CODES, error_code, message, details)
 end
 
--- Validate the common edit request fields and normalize the target path to absolute form.
--- 校验通用编辑请求字段，并将目标路径规范化为绝对路径。
---
--- Parameters:
---     helpers: Shared helper table.
---     request: Raw single-file request table.
---     no_apply: Shared preview-only flag inherited from the root request.
---     pwd_root: Valid absolute `PWD` directory root shared by the whole call, or nil.
--- 参数：
---     helpers：共享辅助表。
---     request：原始单文件请求表。
---     no_apply：从根请求继承的统一仅预览标记。
---     pwd_root：整个调用共享的有效绝对 `PWD` 目录根路径，或 nil。
---
--- Returns:
---     table|nil: Normalized request table on success.
---     string|nil: Markdown error text on failure.
--- 返回值：
---     table|nil：成功时返回规范化后的请求表。
---     string|nil：失败时返回 Markdown 错误文本。
-local function validate_single_request(helpers, request, no_apply, pwd_root)
-    if type(request) ~= "table" then
-        return nil, render_error(helpers, "invalid_files_argument", "each files item must be an object with file, mode, and content", {
-            actual_type = type(request),
-        })
-    end
-    if type(request.file) ~= "string" or helpers.trim(request.file) == "" then
-        return nil, render_error(helpers, "invalid_file", "file must be a non-empty string")
-    end
-    if type(request.mode) ~= "string" or not SUPPORTED_MODES[request.mode] then
-        return nil, render_error(helpers, "invalid_mode", "mode must be overwrite, append, replace_range, insert_before, or insert_after")
-    end
-    if type(request.content) ~= "string" then
-        return nil, render_error(helpers, "invalid_content", "content must be a string")
-    end
-    if (request.mode == "append" or request.mode == "insert_before" or request.mode == "insert_after") and request.content == "" then
-        return nil, render_error(helpers, "empty_content_noop", "append and insert modes require non-empty content")
-    end
-
-    local file_path, environment_error = helpers.expand_environment_path(ERROR_TITLE, PARAMETER_ERROR_CODES, helpers.trim(request.file), "file", pwd_root)
-    if environment_error then
-        return nil, environment_error
-    end
-
-    return {
-        file = file_path,
-        mode = request.mode,
-        content = request.content,
-        start_line = request.start_line,
-        end_line = request.end_line,
-        line = request.line,
-        no_apply = no_apply == true,
-    }, nil
+-- Return whether a value is a non-empty string.
+-- 判断一个值是否为非空字符串。
+local function is_non_empty_string(value)
+    return type(value) == "string" and value ~= ""
 end
 
--- Collect one normalized list of edit requests from single-file or batch input.
--- 从单文件或批量输入中收集一组规范化的编辑请求。
---
--- Parameters:
---     helpers: Shared helper table.
---     args: Raw entry argument table from LuaSkills runtime.
--- 参数：
---     helpers：共享辅助表。
---     args：LuaSkills 运行时传入的原始参数表。
---
--- Returns:
---     table|nil: Array-style normalized request list.
---     boolean|nil: True when the caller used batch `files` mode.
---     string|nil: Markdown error text on failure.
--- 返回值：
---     table|nil：数组形式的规范化请求列表。
---     boolean|nil：调用方使用批量 `files` 模式时返回 true。
---     string|nil：失败时返回 Markdown 错误文本。
-local function collect_requests(helpers, args)
-    local request = type(args) == "table" and args or {}
-    if request.apply ~= nil then
-        return nil, nil, render_error(helpers, "invalid_apply_argument", "apply is no longer supported; use no_apply=true to preview without writing")
-    end
-
-    -- Validate the preview-only flag before any path or file work happens.
-    -- 在执行任何路径或文件处理前校验仅预览标记。
-    local no_apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, request.no_apply, "no_apply")
-    if no_apply_error then
-        return nil, nil, no_apply_error
-    end
-
-    -- A true no_apply value requests preview-only behavior; omitted or false writes by default.
-    -- no_apply 为 true 时请求仅预览；省略或为 false 时默认写入。
-    local no_apply = request.no_apply == true
-
-    local pwd_root, pwd_error = helpers.resolve_pwd_root(ERROR_TITLE, PARAMETER_ERROR_CODES, request.PWD)
-    if pwd_error then
-        return nil, nil, pwd_error
-    end
-
-    if request.files ~= nil then
-        if request.file ~= nil or request.mode ~= nil or request.content ~= nil or request.start_line ~= nil or request.end_line ~= nil or request.line ~= nil then
-            return nil, true, render_error(helpers, "conflicting_batch_arguments", "use either single-file edit arguments or files, not both", {
-                preferred = "files",
+-- Return whether a node contains any field outside its declared field set.
+-- 判断节点是否包含声明字段集合之外的字段。
+local function validate_node_fields(helpers, node, allowed_fields, node_index)
+    for key in pairs(node) do
+        if not allowed_fields[key] then
+            return render_error(helpers, "invalid_node_fields", "node contains a field that is not valid for its type", {
+                node_index = tostring(node_index),
+                field = tostring(key),
             })
-        end
-        local files, files_error = helpers.validate_batch_files_array(ERROR_TITLE, PARAMETER_ERROR_CODES, request.files)
-        if files_error then
-            return nil, true, files_error
-        end
-        local normalized = {}
-        for index, item in ipairs(files) do
-            if item.apply ~= nil then
-                return nil, true, render_error(helpers, "invalid_apply_argument", "apply is no longer supported; use root-level no_apply=true to preview without writing", {
-                    file_index = tostring(index),
-                })
-            end
-            if item.no_apply ~= nil then
-                return nil, true, render_error(helpers, "invalid_no_apply_argument", "no_apply is root-level only in batch mode", {
-                    file_index = tostring(index),
-                })
-            end
-
-            local item_request, item_error = validate_single_request(helpers, item, no_apply, pwd_root)
-            if item_error then
-                return nil, true, render_error(helpers, "invalid_files_argument", "one files item is invalid", {
-                    file_index = tostring(index),
-                }) .. "\n\n" .. item_error
-            end
-            table.insert(normalized, item_request)
-        end
-        return normalized, true, nil
-    end
-
-    local single_request, validation_error = validate_single_request(helpers, request, no_apply, pwd_root)
-    if validation_error then
-        return nil, false, validation_error
-    end
-    return { single_request }, false, nil
-end
-
--- Read one existing file or return an empty baseline for overwrite-based file creation.
--- 读取一个现有文件，或为基于 overwrite 的文件创建返回空基线。
---
--- Parameters:
---     helpers: Shared helper table.
---     file_path: Absolute target file path.
---     mode: Requested edit mode.
--- 参数：
---     helpers：共享辅助表。
---     file_path：绝对目标文件路径。
---     mode：请求的编辑模式。
---
--- Returns:
---     string|nil: Original file content on success.
---     string|nil: Markdown error text on failure.
---     boolean|nil: True when the file existed before the edit.
--- 返回值：
---     string|nil：成功时返回原始文件内容。
---     string|nil：失败时返回 Markdown 错误文本。
---     boolean|nil：编辑前文件存在时返回 true。
-local function read_existing_file(helpers, file_path, mode)
-    if vulcan.fs.exists(file_path) then
-        if vulcan.fs.is_dir(file_path) then
-            return nil, render_error(helpers, "file_is_directory", "file must point to a regular file", {
-                file = file_path,
-            }), nil
-        end
-        local ok, content = pcall(vulcan.fs.read, file_path)
-        if not ok then
-            return nil, render_error(helpers, "file_read_failed", tostring(content), {
-                file = file_path,
-            }), nil
-        end
-        return tostring(content or ""), nil, true
-    end
-
-    if mode == "overwrite" then
-        return "", nil, false
-    end
-    return nil, render_error(helpers, "file_not_found", "file does not exist", {
-        file = file_path,
-    }), nil
-end
-
--- Validate one 1-based line number for insert operations.
--- 校验插入操作使用的 1-based 行号。
---
--- Parameters:
---     helpers: Shared helper table.
---     value: Candidate line number.
---     line_count: Total number of lines in the original file.
--- 参数：
---     helpers：共享辅助表。
---     value：候选行号。
---     line_count：原始文件总行数。
---
--- Returns:
---     number|nil: Validated line number on success.
---     string|nil: Markdown error text on failure.
--- 返回值：
---     number|nil：成功时返回校验通过的行号。
---     string|nil：失败时返回 Markdown 错误文本。
-local function validate_insert_line(helpers, value, line_count)
-    if line_count < 1 then
-        return nil, render_error(helpers, "line_out_of_bounds", "insert_before and insert_after require an existing anchor line; use append or overwrite for empty files", {
-            total_lines = tostring(line_count),
-            allowed_range = "none",
-        })
-    end
-    local line, argument_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, value, "line")
-    if argument_error then
-        return nil, argument_error
-    end
-    if line < 1 or line > line_count then
-        return nil, render_error(helpers, "line_out_of_bounds", "line must point to an existing 1-based anchor line", {
-            line = tostring(line),
-            total_lines = tostring(line_count),
-            allowed_range = "1-" .. tostring(line_count),
-        })
-    end
-    return line, nil
-end
-
--- Validate one 1-based closed line range for replace_range operations.
--- 校验 replace_range 操作使用的 1-based 闭区间行范围。
---
--- Parameters:
---     helpers: Shared helper table.
---     start_value: Candidate start_line value.
---     end_value: Candidate end_line value.
---     line_count: Total number of lines in the original file.
--- 参数：
---     helpers：共享辅助表。
---     start_value：候选 start_line 值。
---     end_value：候选 end_line 值。
---     line_count：原始文件总行数。
---
--- Returns:
---     number|nil: Validated start line.
---     number|nil: Validated end line.
---     string|nil: Markdown error text on failure.
--- 返回值：
---     number|nil：校验通过的起始行号。
---     number|nil：校验通过的结束行号。
---     string|nil：失败时返回 Markdown 错误文本。
-local function validate_replace_range(helpers, start_value, end_value, line_count)
-    if start_value == nil or end_value == nil then
-        return nil, nil, render_error(helpers, "invalid_range", "replace_range requires start_line and end_line")
-    end
-    local start_line, start_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, start_value, "start_line")
-    if start_error then
-        return nil, nil, start_error
-    end
-    local end_line, end_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, end_value, "end_line")
-    if end_error then
-        return nil, nil, end_error
-    end
-    if start_line < 1 or end_line < start_line or end_line > line_count then
-        return nil, nil, render_error(helpers, "invalid_range", "start_line/end_line must describe an existing 1-based line range")
-    end
-    return start_line, end_line, nil
-end
-
--- Apply the requested edit to text and return the new content together with changed span metadata.
--- 对文本应用请求的编辑，并返回新内容与变更区间元数据。
---
--- Parameters:
---     helpers: Shared helper table.
---     request: Normalized edit request.
---     original_content: Original file content.
--- 参数：
---     helpers：共享辅助表。
---     request：规范化后的编辑请求。
---     original_content：原始文件内容。
---
--- Returns:
---     string|nil: Edited file content on success.
---     table|nil: Changed span metadata on success.
---     string|nil: Markdown error text on failure.
--- 返回值：
---     string|nil：成功时返回编辑后的文件内容。
---     table|nil：成功时返回变更区间元数据。
---     string|nil：失败时返回 Markdown 错误文本。
-local function build_edited_content(helpers, request, original_content)
-    local newline = helpers.detect_newline_sequence(original_content)
-    local normalized_insert = helpers.normalize_newlines(request.content, newline)
-    local original_lines, had_final_newline = helpers.split_lines_with_final_newline(original_content)
-    local edit_lines = helpers.split_insert_content(normalized_insert)
-
-    if request.mode == "overwrite" then
-        local inserted_line_count = #helpers.split_insert_content(normalized_insert)
-        return normalized_insert, {
-            start_line = 1,
-            end_line = math.max(1, inserted_line_count),
-            original_start_line = 1,
-            original_end_line = math.max(1, #original_lines),
-            inserted_line_count = inserted_line_count,
-        }, nil
-    end
-
-    if request.mode == "append" then
-        local prefix = original_content
-        if prefix ~= "" and not helpers.ends_with(prefix:gsub("\r\n", "\n"), "\n") then
-            prefix = prefix .. newline
-        end
-        return prefix .. normalized_insert, {
-            start_line = #original_lines + 1,
-            end_line = #original_lines + math.max(1, #edit_lines),
-            original_start_line = #original_lines + 1,
-            original_end_line = #original_lines,
-            inserted_line_count = #edit_lines,
-        }, nil
-    end
-
-    if request.mode == "replace_range" then
-        local start_line, end_line, range_error = validate_replace_range(helpers, request.start_line, request.end_line, #original_lines)
-        if range_error then
-            return nil, nil, range_error
-        end
-        for index = end_line, start_line, -1 do
-            table.remove(original_lines, index)
-        end
-        for index = #edit_lines, 1, -1 do
-            table.insert(original_lines, start_line, edit_lines[index])
-        end
-        return helpers.join_lines(original_lines, had_final_newline, newline), {
-            start_line = start_line,
-            end_line = start_line + math.max(0, #edit_lines - 1),
-            original_start_line = start_line,
-            original_end_line = end_line,
-            inserted_line_count = #edit_lines,
-        }, nil
-    end
-
-    local line, line_error = validate_insert_line(helpers, request.line, #original_lines)
-    if line_error then
-        return nil, nil, line_error
-    end
-    local insert_index = request.mode == "insert_before" and line or line + 1
-    for index = #edit_lines, 1, -1 do
-        table.insert(original_lines, insert_index, edit_lines[index])
-    end
-    return helpers.join_lines(original_lines, had_final_newline, newline), {
-        start_line = insert_index,
-        end_line = insert_index + math.max(0, #edit_lines - 1),
-        original_start_line = line,
-        original_end_line = line,
-        inserted_line_count = #edit_lines,
-    }, nil
-end
-
--- Determine which canonical host change type should represent the edit result.
--- 判断哪个 canonical 宿主变更类型最适合表示本次编辑结果。
---
--- Parameters:
---     request: Normalized edit request.
---     existed_before: Whether the file existed before the edit.
--- 参数：
---     request：规范化后的编辑请求。
---     existed_before：编辑前文件是否存在。
---
--- Returns:
---     string: Either create or modify.
--- 返回值：
---     string：create 或 modify。
-local function determine_change_type(request, existed_before)
-    if request.mode == "overwrite" and existed_before ~= true then
-        return "create"
-    end
-    return "modify"
-end
-
--- Prepare one validated edit operation before preview rendering or disk writes.
--- 在预览渲染或落盘写入前准备一次已校验的编辑操作。
---
--- Parameters:
---     helpers: Shared helper table.
---     request: Normalized edit request.
--- 参数：
---     helpers：共享辅助表。
---     request：规范化后的编辑请求。
---
--- Returns:
---     table|nil: Prepared operation summary on success.
---     string|nil: Markdown error text on failure.
--- 返回值：
---     table|nil：成功时返回已准备的操作摘要。
---     string|nil：失败时返回 Markdown 错误文本。
-local function prepare_operation(helpers, request)
-    local original_content, read_error, existed_before = read_existing_file(helpers, request.file, request.mode)
-    if read_error then
-        return nil, read_error
-    end
-
-    local edited_content, changed_span, edit_error = build_edited_content(helpers, request, original_content)
-    if edit_error then
-        return nil, edit_error
-    end
-
-    local change_type = determine_change_type(request, existed_before)
-    local file_record = nil
-    if change_type == "create" then
-        file_record = helpers.build_create_file_record(request.file, edited_content)
-    else
-        file_record = helpers.build_modify_file_record(request.file, original_content, edited_content, changed_span)
-    end
-    return {
-        request = request,
-        original_content = original_content,
-        edited_content = edited_content,
-        changed_span = changed_span,
-        change_type = change_type,
-        file_record = file_record,
-    }, nil
-end
-
--- Apply all prepared edit operations in request order.
--- 按请求顺序落盘执行全部已准备的编辑操作。
---
--- Parameters:
---     helpers: Shared helper table.
---     operations: Array-style prepared operation list.
--- 参数：
---     helpers：共享辅助表。
---     operations：数组形式的已准备操作列表。
---
--- Returns:
---     string|nil: Markdown error text on failure, otherwise nil.
--- 返回值：
---     string|nil：失败时返回 Markdown 错误文本，否则返回 nil。
-local function apply_operations(helpers, operations)
-    for _, operation in ipairs(operations or {}) do
-        local write_error = helpers.write_file(ERROR_TITLE, PARAMETER_ERROR_CODES, operation.request.file, operation.edited_content, operation.original_content)
-        if write_error then
-            return write_error
         end
     end
     return nil
 end
 
--- Render the final edit result while preserving the current Markdown contract for single-file calls.
--- 在保持单文件调用当前 Markdown 契约的前提下渲染最终编辑结果。
---
--- Parameters:
---     helpers: Shared helper table.
---     operation: Prepared single-file operation.
--- 参数：
---     helpers：共享辅助表。
---     operation：已准备的单文件操作。
---
--- Returns:
---     string: Markdown success payload.
--- 返回值：
---     string：Markdown 成功结果文本。
-local function render_single_result(helpers, operation)
-    local request = operation.request
-    local original_lines = select(1, helpers.split_lines_with_final_newline(operation.original_content))
-    local edited_lines = select(1, helpers.split_lines_with_final_newline(operation.edited_content))
-    local original_start_line = operation.changed_span.original_start_line or operation.changed_span.start_line
-    local original_end_line = operation.changed_span.original_end_line or operation.changed_span.end_line
-    local original_span = "none"
-    if original_start_line >= 1 and original_start_line <= original_end_line and original_end_line <= #original_lines then
-        original_span = string.format("L%d-L%d", original_start_line, original_end_line)
-    end
-    local edited_span = "none"
-    if (operation.changed_span.inserted_line_count or 0) > 0 then
-        edited_span = string.format("L%d-L%d", operation.changed_span.start_line, operation.changed_span.end_line)
-    end
-    local lines = {
-        "# " .. RESULT_TITLE,
-        "",
-        "- status: `" .. (request.no_apply and "PREVIEW_ONLY" or "APPLIED") .. "`",
-        "- file: `" .. request.file .. "`",
-        "- mode: `" .. request.mode .. "`",
-        "- original_lines: `" .. tostring(#original_lines) .. "`",
-        "- edited_lines: `" .. tostring(#edited_lines) .. "`",
-        "- original_span: `" .. original_span .. "`",
-        "- edited_span: `" .. edited_span .. "`",
-        "- changed_span: `original " .. original_span .. " -> edited " .. edited_span .. "`",
-        "",
-        helpers.render_operation_preview(request.mode, request.content, operation.original_content, operation.edited_content, operation.changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
-    }
-    return table.concat(lines, "\n")
-end
-
--- Render a compact per-file batch section for edit results.
--- 为编辑结果渲染紧凑的按文件批量分节。
---
--- Parameters:
---     helpers: Shared helper table.
---     operation: Prepared edit operation.
---     file_index: 1-based file index in the batch.
---     total_files: Total number of files in the batch.
--- 参数：
---     helpers：共享辅助表。
---     operation：已准备的编辑操作。
---     file_index：批量中的 1-based 文件序号。
---     total_files：批量中的文件总数。
---
--- Returns:
---     string: Markdown section for one batch item.
--- 返回值：
---     string：单个批量项的 Markdown 分节文本。
-local function render_batch_section(helpers, operation, file_index, total_files)
-    local original_lines = select(1, helpers.split_lines_with_final_newline(operation.original_content))
-    local edited_lines = select(1, helpers.split_lines_with_final_newline(operation.edited_content))
-    local original_start_line = operation.changed_span.original_start_line or operation.changed_span.start_line
-    local original_end_line = operation.changed_span.original_end_line or operation.changed_span.end_line
-    local original_span = "none"
-    if original_start_line >= 1 and original_start_line <= original_end_line and original_end_line <= #original_lines then
-        original_span = string.format("L%d-L%d", original_start_line, original_end_line)
-    end
-    local edited_span = "none"
-    if (operation.changed_span.inserted_line_count or 0) > 0 then
-        edited_span = string.format("L%d-L%d", operation.changed_span.start_line, operation.changed_span.end_line)
-    end
-    local lines = {
-        "## File " .. tostring(file_index) .. "/" .. tostring(total_files),
-        "",
-        "- file: `" .. operation.request.file .. "`",
-        "- mode: `" .. operation.request.mode .. "`",
-        "- change: `" .. operation.change_type .. "`",
-        "- original_lines: `" .. tostring(#original_lines) .. "`",
-        "- edited_lines: `" .. tostring(#edited_lines) .. "`",
-        "- original_span: `" .. original_span .. "`",
-        "- edited_span: `" .. edited_span .. "`",
-        "",
-        helpers.render_operation_preview(operation.request.mode, operation.request.content, operation.original_content, operation.edited_content, operation.changed_span, PREVIEW_TITLE, helpers.DEFAULT_MAX_PREVIEW_LINES),
-    }
-    return table.concat(lines, "\n")
-end
-
--- Render the final batch edit result with one top-level summary and per-file sections.
--- 使用一个顶层摘要和逐文件分节渲染最终批量编辑结果。
---
--- Parameters:
---     helpers: Shared helper table.
---     operations: Array-style prepared operation list.
---     apply: Whether the batch has been written to disk.
--- 参数：
---     helpers：共享辅助表。
---     operations：数组形式的已准备操作列表。
---     apply：该批量是否已落盘。
---
--- Returns:
---     string: Markdown batch success payload.
--- 返回值：
---     string：Markdown 批量成功结果文本。
-local function render_batch_result(helpers, operations, apply)
-    local lines = {
-        "# " .. RESULT_TITLE,
-        "",
-        "- status: `" .. (apply and "APPLIED" or "PREVIEW_ONLY") .. "`",
-        "- files: `" .. tostring(#(operations or {})) .. "`",
-        "- limit: `" .. tostring(helpers.MAX_BATCH_FILES or 10) .. "`",
-    }
-    for index, operation in ipairs(operations or {}) do
-        table.insert(lines, "")
-        table.insert(lines, render_batch_section(helpers, operation, index, #operations))
-    end
-    return table.concat(lines, "\n")
-end
-
--- Build one aggregated host `change_set` result for batch and single edit calls.
--- 为批量和单文件编辑调用构造一个聚合宿主 `change_set` 结果。
---
--- Parameters:
---     helpers: Shared helper table.
---     capability: Capability snapshot from resolve_host_result_capability.
---     operations: Array-style prepared operation list.
---     apply: Whether the operation has been written to disk.
--- 参数：
---     helpers：共享辅助表。
---     capability：来自 resolve_host_result_capability 的能力快照。
---     operations：数组形式的已准备操作列表。
---     apply：操作是否已经落盘。
---
--- Returns:
---     table|nil: Optional host structured change_set result.
--- 返回值：
---     table|nil：可选的宿主结构化 change_set 结果。
-local function build_host_result(helpers, capability, operations, apply)
-    local file_records = {}
-    for _, operation in ipairs(operations or {}) do
-        if type(operation.file_record) == "table" then
-            table.insert(file_records, operation.file_record)
+-- Validate that the nodes value is a contiguous array before using ipairs.
+-- 在使用 ipairs 前验证 nodes 是连续数组，拒绝字符串键和稀疏数字键。
+local function validate_nodes_array(helpers, nodes)
+    local count = #nodes
+    for key in pairs(nodes) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 or key > count then
+            return render_error(helpers, "invalid_nodes_argument", "nodes must be a contiguous array of edit or append node objects", {
+                field = tostring(key),
+            })
         end
     end
-    local summary = string.format("%s %d file edit%s.", apply and "Applied" or "Previewed", #file_records, #file_records == 1 and "" or "s")
-    return helpers.build_change_set_host_result(capability, apply, summary, file_records)
+    for index = 1, count do
+        if nodes[index] == nil then
+            return render_error(helpers, "invalid_nodes_argument", "nodes must be a contiguous array of edit or append node objects", {
+                node_index = tostring(index),
+            })
+        end
+    end
+    return nil
 end
 
--- Run the edit entry with shared helpers and optional host change_set output.
--- 使用共享辅助与可选宿主 change_set 输出执行编辑入口。
---
--- Parameters:
---     args: Raw entry argument table from LuaSkills runtime.
--- 参数：
---     args：LuaSkills 运行时传入的原始参数表。
---
--- Returns:
---     string: Markdown primary result for AI and text consumers.
---     nil: No overflow mode is used by this tool.
---     nil: No template hint is used by this tool.
---     table|nil: Optional host structured change_set result.
--- 返回值：
---     string：面向 AI 与文本消费方的 Markdown 主结果。
---     nil：本工具不使用 overflow mode。
---     nil：本工具不使用 template hint。
---     table|nil：可选的宿主结构化 change_set 结果。
+-- Parse one positive integer without silently accepting malformed values.
+-- 解析一个正整数，不静默接受格式错误的值。
+local function parse_positive_line(helpers, value, field_name, node_index)
+    local line, argument_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, value, field_name)
+    if argument_error then
+        return nil, render_error(helpers, "invalid_edit_range", "node line range contains an invalid integer", {
+            node_index = tostring(node_index),
+            field = field_name,
+            detail = argument_error,
+        })
+    end
+    if line < 1 then
+        return nil, render_error(helpers, "invalid_edit_range", "node line numbers must be positive integers", {
+            node_index = tostring(node_index),
+            field = field_name,
+            value = tostring(line),
+        })
+    end
+    return line, nil
+end
+
+-- Copy an array-style line table without sharing mutable entries.
+-- 复制数组形式的行表，避免共享可变元素。
+local function copy_lines(lines)
+    local copied = {}
+    for index, line in ipairs(lines or {}) do
+        copied[index] = line
+    end
+    return copied
+end
+
+-- Return the exact line slice represented by an inclusive range.
+-- 返回闭合行号范围对应的精确行切片。
+local function slice_lines(lines, start_line, end_line)
+    local result = {}
+    if not start_line or not end_line or start_line > end_line then
+        return result
+    end
+    for index = start_line, end_line do
+        table.insert(result, tostring(lines[index] or ""))
+    end
+    return result
+end
+
+-- Compare two logical line arrays without trimming or case folding.
+-- 比较两个逻辑行数组，不执行 trim 或大小写折叠。
+local function lines_equal(left, right)
+    if #left ~= #right then
+        return false
+    end
+    for index = 1, #left do
+        if tostring(left[index] or "") ~= tostring(right[index] or "") then
+            return false
+        end
+    end
+    return true
+end
+
+-- Find all exact contiguous occurrences of a logical line sequence.
+-- 查找逻辑行序列的全部精确连续匹配位置。
+local function find_line_occurrences(lines, target)
+    local positions = {}
+    if #target == 0 or #target > #lines then
+        return positions
+    end
+    local last_start = #lines - #target + 1
+    for start_line = 1, last_start do
+        local candidate = slice_lines(lines, start_line, start_line + #target - 1)
+        if lines_equal(candidate, target) then
+            table.insert(positions, start_line)
+        end
+    end
+    return positions
+end
+
+-- Format one inclusive line range for human-readable diagnostics.
+-- 将闭合行号范围格式化为可读诊断文本。
+local function format_range(start_line, end_line)
+    if not start_line or not end_line or start_line > end_line then
+        return "none"
+    end
+    return string.format("L%d-L%d", start_line, end_line)
+end
+
+-- Render logical lines as text using the selected newline sequence.
+-- 使用指定换行序列将逻辑行渲染为文本。
+local function render_lines(helpers, lines, newline)
+    return helpers.join_lines(lines or {}, false, newline)
+end
+
+-- Return a compact representation of previous node deltas.
+-- 返回前置节点行数增减量的紧凑表示。
+local function build_shifted_by(applied_nodes)
+    local shifted = {}
+    for _, result in ipairs(applied_nodes or {}) do
+        if tonumber(result.delta) and tonumber(result.delta) ~= 0 then
+            table.insert(shifted, {
+                id = result.id,
+                delta = tonumber(result.delta),
+            })
+        end
+    end
+    return shifted
+end
+
+-- Calculate the current staged range of a not-yet-applied edit node.
+-- 计算尚未应用编辑节点在当前暂存内容中的范围。
+local function calculate_mapped_range(node, applied_nodes)
+    local shift = 0
+    for _, result in ipairs(applied_nodes or {}) do
+        if result.original_end_line < node.start_line then
+            shift = shift + (tonumber(result.delta) or 0)
+        end
+    end
+    return node.start_line + shift, node.end_line + shift
+end
+
+-- Build a stable list of skipped node descriptors after a node-level failure.
+-- 构造节点级失败后稳定的未执行节点描述列表。
+local function build_skipped_nodes(nodes, failed_index, applied_nodes)
+    local skipped = {}
+    for index = failed_index + 1, #nodes do
+        local node = nodes[index]
+        local current_start, current_end = nil, nil
+        if node.type == "edit" then
+            current_start, current_end = calculate_mapped_range(node, applied_nodes)
+        end
+        table.insert(skipped, {
+            id = node.id,
+            node_index = node.original_index,
+            type = node.type,
+            original_range = node.type == "edit" and format_range(node.start_line, node.end_line) or "append",
+            current_range = node.type == "edit" and format_range(current_start, current_end) or "end-of-file",
+            reason = "not executed after the previous node failed",
+        })
+    end
+    return skipped
+end
+
+-- Convert skipped node descriptors into a compact Markdown value.
+-- 将未执行节点描述转换为紧凑的 Markdown 值。
+local function describe_skipped_nodes(skipped)
+    local values = {}
+    for _, node in ipairs(skipped or {}) do
+        table.insert(values, string.format("%s(%s, current=%s)", tostring(node.id), tostring(node.original_range), tostring(node.current_range)))
+    end
+    return #values > 0 and table.concat(values, "; ") or "none"
+end
+
+-- Replace one inclusive range in a mutable line table.
+-- 在可变行表中替换一个闭合范围。
+local function replace_line_range(lines, start_line, end_line, replacement)
+    for index = end_line, start_line, -1 do
+        table.remove(lines, index)
+    end
+    for index = #replacement, 1, -1 do
+        table.insert(lines, start_line, replacement[index])
+    end
+end
+
+-- Read one existing regular file and return its original text.
+-- 读取一个已存在的普通文件并返回原始文本。
+local function read_existing_file(helpers, file_path)
+    if not vulcan.fs.exists(file_path) then
+        return nil, render_error(helpers, "file_not_found", "file does not exist; edit only accepts existing files", {
+            file = file_path,
+        })
+    end
+    if vulcan.fs.is_dir(file_path) then
+        return nil, render_error(helpers, "file_is_directory", "file must point to a regular file", {
+            file = file_path,
+        })
+    end
+    local ok, content = pcall(vulcan.fs.read, file_path)
+    if not ok then
+        return nil, render_error(helpers, "file_read_failed", tostring(content), {
+            file = file_path,
+        })
+    end
+    return tostring(content or ""), nil
+end
+
+-- Normalize and structurally validate the root single-file request.
+-- 规范化并执行根级单文件请求的结构校验。
+local function validate_request_shape(helpers, args)
+    local raw = type(args) == "table" and args or {}
+    if raw.apply ~= nil then
+        return nil, render_error(helpers, "invalid_apply_argument", "apply is no longer supported; use no_apply=true to preview without writing")
+    end
+    if raw.files ~= nil then
+        return nil, render_error(helpers, "multiple_files_not_supported", "edit accepts one file per request; use nodes for multiple positions in that file")
+    end
+    for _, forbidden in ipairs({ "mode", "content", "start_line", "end_line", "line" }) do
+        if raw[forbidden] ~= nil then
+            return nil, render_error(helpers, "invalid_request", "legacy edit fields are not accepted; use file plus nodes", {
+                field = forbidden,
+            })
+        end
+    end
+    -- Reject root fields outside the published single-file request contract.
+    -- 拒绝公开单文件请求契约之外的根字段，避免仅依赖外层 Schema 防护。
+    local allowed_root_fields = {
+        PWD = true,
+        file = true,
+        no_apply = true,
+        nodes = true,
+    }
+    for field_name in pairs(raw) do
+        if not allowed_root_fields[field_name] then
+            return nil, render_error(helpers, "invalid_request", "request contains an unsupported root field", {
+                field = tostring(field_name),
+            })
+        end
+    end
+
+    local no_apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, raw.no_apply, "no_apply")
+    if no_apply_error then
+        return nil, no_apply_error
+    end
+    local pwd_root, pwd_error = helpers.resolve_pwd_root(ERROR_TITLE, PARAMETER_ERROR_CODES, raw.PWD)
+    if pwd_error then
+        return nil, pwd_error
+    end
+    if type(raw.file) ~= "string" or helpers.trim(raw.file) == "" then
+        return nil, render_error(helpers, "invalid_file", "file must be a non-empty string")
+    end
+    if type(raw.nodes) ~= "table" then
+        return nil, render_error(helpers, "invalid_nodes_argument", "nodes must be an array of edit or append node objects")
+    end
+    local nodes_array_error = validate_nodes_array(helpers, raw.nodes)
+    if nodes_array_error then
+        return nil, nodes_array_error
+    end
+    if #raw.nodes < 1 then
+        return nil, render_error(helpers, "empty_nodes", "nodes must contain at least one node")
+    end
+    if #raw.nodes > MAX_NODES then
+        return nil, render_error(helpers, "too_many_nodes", "nodes exceed the per-request limit", {
+            limit = tostring(MAX_NODES),
+            actual_count = tostring(#raw.nodes),
+        })
+    end
+
+    local file_path, environment_error = helpers.expand_environment_path(ERROR_TITLE, PARAMETER_ERROR_CODES, helpers.trim(raw.file), "file", pwd_root)
+    if environment_error then
+        return nil, environment_error
+    end
+
+    local nodes = {}
+    local seen_ids = {}
+    local content_bytes = 0
+    for index, raw_node in ipairs(raw.nodes) do
+        if type(raw_node) ~= "table" then
+            return nil, render_error(helpers, "invalid_node", "each node must be an object", {
+                node_index = tostring(index),
+            })
+        end
+        if not is_non_empty_string(raw_node.id) then
+            return nil, render_error(helpers, "invalid_node", "each node must have a non-empty id", {
+                node_index = tostring(index),
+            })
+        end
+        if seen_ids[raw_node.id] then
+            return nil, render_error(helpers, "duplicate_node_id", "node ids must be unique within one request", {
+                node_id = raw_node.id,
+                first_node_index = tostring(seen_ids[raw_node.id]),
+                duplicate_node_index = tostring(index),
+            })
+        end
+        seen_ids[raw_node.id] = index
+        if raw_node.type ~= "edit" and raw_node.type ~= "append" then
+            return nil, render_error(helpers, "invalid_node_type", "node type must be edit or append", {
+                node_id = raw_node.id,
+                node_index = tostring(index),
+            })
+        end
+
+        local node
+        if raw_node.type == "edit" then
+            local field_error = validate_node_fields(helpers, raw_node, {
+                id = true,
+                type = true,
+                start_line = true,
+                end_line = true,
+                old_content = true,
+                new_content = true,
+            }, index)
+            if field_error then
+                return nil, field_error
+            end
+            local start_line, start_error = parse_positive_line(helpers, raw_node.start_line, "start_line", index)
+            if start_error then
+                return nil, start_error
+            end
+            local end_line, end_error = parse_positive_line(helpers, raw_node.end_line, "end_line", index)
+            if end_error then
+                return nil, end_error
+            end
+            if end_line < start_line then
+                return nil, render_error(helpers, "invalid_edit_range", "end_line must be greater than or equal to start_line", {
+                    node_id = raw_node.id,
+                    node_index = tostring(index),
+                    start_line = tostring(start_line),
+                    end_line = tostring(end_line),
+                })
+            end
+            if not is_non_empty_string(raw_node.old_content) then
+                return nil, render_error(helpers, "invalid_node", "edit.old_content must be a non-empty string", {
+                    node_id = raw_node.id,
+                    node_index = tostring(index),
+                })
+            end
+            if type(raw_node.new_content) ~= "string" then
+                return nil, render_error(helpers, "invalid_node", "edit.new_content must be a string and may be empty for deletion", {
+                    node_id = raw_node.id,
+                    node_index = tostring(index),
+                })
+            end
+            node = {
+                id = raw_node.id,
+                type = "edit",
+                start_line = start_line,
+                end_line = end_line,
+                old_content = raw_node.old_content,
+                new_content = raw_node.new_content,
+                original_index = index,
+            }
+            content_bytes = content_bytes + #raw_node.old_content + #raw_node.new_content
+        else
+            local field_error = validate_node_fields(helpers, raw_node, {
+                id = true,
+                type = true,
+                new_content = true,
+            }, index)
+            if field_error then
+                return nil, field_error
+            end
+            if type(raw_node.new_content) ~= "string" or raw_node.new_content == "" then
+                return nil, render_error(helpers, "empty_append", "append.new_content must be a non-empty string", {
+                    node_id = raw_node.id,
+                    node_index = tostring(index),
+                })
+            end
+            node = {
+                id = raw_node.id,
+                type = "append",
+                new_content = raw_node.new_content,
+                original_index = index,
+            }
+            content_bytes = content_bytes + #raw_node.new_content
+        end
+        if content_bytes > MAX_REQUEST_CONTENT_BYTES then
+            return nil, render_error(helpers, "request_content_too_large", "request content exceeds the per-request byte limit", {
+                limit = tostring(MAX_REQUEST_CONTENT_BYTES),
+                actual_bytes = tostring(content_bytes),
+                node_id = raw_node.id,
+            })
+        end
+        table.insert(nodes, node)
+    end
+
+    return {
+        file = file_path,
+        no_apply = raw.no_apply == true,
+        nodes = nodes,
+        content_bytes = content_bytes,
+    }, nil
+end
+
+-- Read the file and complete request-level range and overlap validation.
+-- 读取文件并完成请求级范围与重叠校验。
+local function prepare_request(helpers, request)
+    local original_content, read_error = read_existing_file(helpers, request.file)
+    if read_error then
+        return nil, read_error
+    end
+    local newline = helpers.detect_newline_sequence(original_content)
+    local original_lines, had_final_newline = helpers.split_lines_with_final_newline(original_content)
+    local edit_nodes = {}
+    local append_nodes = {}
+    for _, node in ipairs(request.nodes) do
+        if node.type == "edit" then
+            if #original_lines == 0 then
+                return nil, render_error(helpers, "edit_on_empty_file", "empty files have no edit anchor; use an append node", {
+                    node_id = node.id,
+                    node_index = tostring(node.original_index),
+                })
+            end
+            if node.end_line > #original_lines then
+                return nil, render_error(helpers, "invalid_edit_range", "edit range must be inside the original file line range", {
+                    node_id = node.id,
+                    node_index = tostring(node.original_index),
+                    requested_range = format_range(node.start_line, node.end_line),
+                    original_line_count = tostring(#original_lines),
+                })
+            end
+            table.insert(edit_nodes, node)
+        else
+            table.insert(append_nodes, node)
+        end
+    end
+    table.sort(edit_nodes, function(left, right)
+        if left.start_line == right.start_line then
+            return left.original_index < right.original_index
+        end
+        return left.start_line < right.start_line
+    end)
+    for index = 2, #edit_nodes do
+        local previous = edit_nodes[index - 1]
+        local current = edit_nodes[index]
+        if current.start_line <= previous.end_line then
+            return nil, render_error(helpers, "overlapping_nodes", "overlapping edit nodes reject the complete request", {
+                first_node_id = previous.id,
+                first_range = format_range(previous.start_line, previous.end_line),
+                second_node_id = current.id,
+                second_range = format_range(current.start_line, current.end_line),
+                overlap_range = format_range(current.start_line, math.min(previous.end_line, current.end_line)),
+                commit_scope = "none",
+            })
+        end
+    end
+    local ordered_nodes = {}
+    for _, node in ipairs(edit_nodes) do
+        table.insert(ordered_nodes, node)
+    end
+    for _, node in ipairs(append_nodes) do
+        table.insert(ordered_nodes, node)
+    end
+    request.nodes = ordered_nodes
+    request.original_content = original_content
+    request.original_lines = original_lines
+    request.had_final_newline = had_final_newline
+    request.newline = newline
+    return request, nil
+end
+
+-- Build a node result with original, current, final, and shift metadata.
+-- 构造包含原始、当前、最终范围和偏移元数据的节点结果。
+local function build_node_result(node, current_start, current_end, new_line_count, applied_nodes)
+    local old_line_count = node.type == "edit" and (node.end_line - node.start_line + 1) or 0
+    local delta = node.type == "edit" and (new_line_count - old_line_count) or new_line_count
+    local final_start = current_start
+    local final_end = new_line_count > 0 and (current_start + new_line_count - 1) or (current_start - 1)
+    return {
+        id = node.id,
+        type = node.type,
+        original_index = node.original_index,
+        original_start_line = node.type == "edit" and node.start_line or nil,
+        original_end_line = node.type == "edit" and node.end_line or nil,
+        current_start_line = current_start,
+        current_end_line = current_end,
+        start_line = final_start,
+        end_line = final_end,
+        final_range = format_range(final_start, final_end),
+        final_anchor_line = new_line_count == 0 and current_start or nil,
+        old_line_count = old_line_count,
+        new_line_count = new_line_count,
+        delta = delta,
+        shifted_by = build_shifted_by(applied_nodes),
+        new_content = node.new_content,
+        changed_span = {
+            start_line = final_start,
+            end_line = final_end,
+            original_start_line = node.type == "edit" and node.start_line or current_start,
+            original_end_line = node.type == "edit" and node.end_line or (current_start - 1),
+            inserted_line_count = new_line_count,
+        },
+    }
+end
+
+-- Validate final content with validators that are reliable for the file type.
+-- 使用对目标文件类型可靠的校验器验证最终内容。
+local function validate_final_content(helpers, file_path, content)
+    if tostring(file_path):lower():match("%.json$") then
+        if not vulcan.json or type(vulcan.json.decode) ~= "function" then
+            return render_error(helpers, "final_content_validation_failed", "JSON validation is unavailable in the host runtime", {
+                file = file_path,
+            })
+        end
+        local ok, decoded = pcall(vulcan.json.decode, content)
+        if not ok then
+            return render_error(helpers, "final_content_validation_failed", "final JSON content is invalid", {
+                file = file_path,
+                detail = tostring(decoded),
+            })
+        end
+        if decoded == nil and content ~= "null" then
+            return render_error(helpers, "final_content_validation_failed", "final JSON content could not be decoded", {
+                file = file_path,
+            })
+        end
+    end
+    return nil
+end
+
+-- Build one canonical host file record containing one hunk per node.
+-- 构造每个节点一个 hunk 的 canonical 宿主文件记录。
+local function build_multi_modify_record(helpers, request, final_content, node_results)
+    local record = {
+        change = "modify",
+        path = request.file,
+        hunks = {},
+    }
+    for _, result in ipairs(node_results or {}) do
+        local single = helpers.build_modify_file_record(request.file, request.original_content, final_content, result.changed_span)
+        if type(single) == "table" and type(single.hunks) == "table" then
+            for _, hunk in ipairs(single.hunks) do
+                hunk.node_id = result.id
+                hunk.original_range = result.type == "edit" and format_range(result.original_start_line, result.original_end_line) or "append"
+                hunk.final_range = result.final_range
+                hunk.delta = result.delta
+                hunk.shifted_by = result.shifted_by
+                table.insert(record.hunks, hunk)
+            end
+        end
+    end
+    if #record.hunks == 0 then
+        return nil
+    end
+    return record
+end
+
+-- Build the optional host change_set projection for the current disk state.
+-- 为当前磁盘状态构造可选的宿主 change_set 投影。
+local function build_host_result(helpers, capability, request, final_content, node_results, apply, summary)
+    local record = build_multi_modify_record(helpers, request, final_content, node_results)
+    if not record then
+        return nil
+    end
+    return helpers.build_change_set_host_result(capability, apply, summary, { record })
+end
+
+-- Describe one node's shift sources in Markdown.
+-- 将一个节点的偏移来源描述为 Markdown。
+local function describe_shift(node_result)
+    if not node_result.shifted_by or #node_result.shifted_by == 0 then
+        return "前置节点未造成行号偏移"
+    end
+    local parts = {}
+    local total = 0
+    for _, item in ipairs(node_result.shifted_by) do
+        total = total + (tonumber(item.delta) or 0)
+        table.insert(parts, string.format("%s(%+d行)", tostring(item.id), tonumber(item.delta) or 0))
+    end
+    return string.format("受 %s 影响，累计偏移 %+d 行", table.concat(parts, "、"), total)
+end
+
+-- Render one node preview against the final staged content.
+-- 根据最终暂存内容渲染一个节点预览。
+local function render_node_preview(helpers, request, final_content, node_result)
+    local mode = node_result.type == "append" and "append" or "replace_range"
+    return helpers.render_operation_preview(mode, node_result.new_content, request.original_content, final_content, node_result.changed_span, "Preview " .. tostring(node_result.id), helpers.DEFAULT_MAX_PREVIEW_LINES, final_content)
+end
+
+-- Render a successful full or preview result with sorted final ranges.
+-- 渲染包含排序后最终范围的完整成功或预览结果。
+local function render_success(helpers, request, final_content, node_results, status, commit_scope)
+    local original_lines = request.original_lines
+    local final_lines = select(1, helpers.split_lines_with_final_newline(final_content))
+    local lines = {
+        "# " .. RESULT_TITLE,
+        "",
+        "- status: `" .. status .. "`",
+        "- commit_scope: `" .. commit_scope .. "`",
+        "- committed: `" .. tostring(commit_scope ~= "none") .. "`",
+        "- file: `" .. request.file .. "`",
+        "- original_lines: `" .. tostring(#original_lines) .. "`",
+        "- final_lines: `" .. tostring(#final_lines) .. "`",
+        "- node_order: `original_start_line ascending; append nodes last`",
+        "",
+        "## Node Summary",
+    }
+    for index, result in ipairs(node_results) do
+        table.insert(lines, string.format("%d. `%s` (%s): original `%s` -> final `%s`, delta `%+d`", index, result.id, result.type, result.type == "edit" and format_range(result.original_start_line, result.original_end_line) or "append", result.final_range, result.delta))
+        table.insert(lines, "   - shift: " .. describe_shift(result))
+        if result.final_anchor_line then
+            table.insert(lines, "   - final_anchor_line: `L" .. tostring(result.final_anchor_line) .. "`")
+        end
+    end
+    table.insert(lines, "")
+    table.insert(lines, "## Previews")
+    for _, result in ipairs(node_results) do
+        table.insert(lines, "")
+        table.insert(lines, render_node_preview(helpers, request, final_content, result))
+    end
+    return table.concat(lines, "\n")
+end
+
+-- Render a node-level failure with committed, failed, and skipped state.
+-- 渲染包含已提交、失败和未执行状态的节点级错误。
+local function render_node_failure(helpers, request, error_code, message, failed_node, failed_index, applied_nodes, staged_lines, commit_scope, match_count, candidates, candidates_omitted)
+    local current_start, current_end = nil, nil
+    local actual_content = "none"
+    if failed_node.type == "edit" then
+        current_start, current_end = calculate_mapped_range(failed_node, applied_nodes)
+        actual_content = render_lines(helpers, slice_lines(staged_lines, current_start, current_end), request.newline)
+    end
+    local skipped = build_skipped_nodes(request.nodes, failed_index, applied_nodes)
+    local applied_descriptions = {}
+    for _, result in ipairs(applied_nodes) do
+        table.insert(applied_descriptions, string.format("%s(%s, final=%s, delta=%+d)", result.id, result.type, result.final_range, result.delta))
+    end
+    local details = {
+        file = request.file,
+        failed_node_id = failed_node.id,
+        failed_node_index = tostring(failed_node.original_index),
+        failed_node_intent = failed_node.type == "edit" and ("edit " .. format_range(failed_node.start_line, failed_node.end_line)) or "append",
+        original_range = failed_node.type == "edit" and format_range(failed_node.start_line, failed_node.end_line) or "append",
+        mapped_current_range = failed_node.type == "edit" and format_range(current_start, current_end) or "end-of-file",
+        actual_content_at_mapped_range = actual_content,
+        match_count = match_count and tostring(match_count) or "not evaluated",
+        candidates = candidates and table.concat(candidates, ", ") or "none",
+        candidates_omitted = tostring(candidates_omitted or 0),
+        committed_prefix_nodes = commit_scope == "prefix" and table.concat(applied_descriptions, "; ") or "none",
+        staged_prefix_nodes = #applied_descriptions > 0 and table.concat(applied_descriptions, "; ") or "none",
+        skipped_nodes = describe_skipped_nodes(skipped),
+        commit_scope = commit_scope,
+        committed = tostring(commit_scope ~= "none"),
+        file_state = commit_scope == "prefix" and "successful prefix is on disk" or "original file remains on disk",
+    }
+    return render_error(helpers, error_code, message, details)
+end
+
+-- Render a final-validation or write failure with staged execution state.
+-- 渲染最终校验或写入失败时的暂存执行状态。
+local function render_global_failure(helpers, request, error_code, message, applied_nodes, commit_scope, detail)
+    local applied_descriptions = {}
+    for _, result in ipairs(applied_nodes or {}) do
+        table.insert(applied_descriptions, string.format("%s(final=%s, delta=%+d)", result.id, result.final_range, result.delta))
+    end
+    return render_error(helpers, error_code, message, {
+        file = request.file,
+        committed_prefix_nodes = commit_scope == "prefix" and table.concat(applied_descriptions, "; ") or "none",
+        staged_prefix_nodes = #applied_descriptions > 0 and table.concat(applied_descriptions, "; ") or "none",
+        skipped_nodes = "none",
+        commit_scope = commit_scope,
+        committed = tostring(commit_scope ~= "none"),
+        file_state = error_code == "write_failed" and "disk state uncertain; re-read file before retry" or (commit_scope == "none" and "original file remains on disk" or "partial file state; inspect I/O diagnostics"),
+        detail = detail or "none",
+    })
+end
+
+-- Apply a staged prefix or complete content through the shared atomic writer.
+-- 通过共享原子写入器提交暂存前缀或完整内容。
+local function commit_content(helpers, request, content)
+    return helpers.write_file(ERROR_TITLE, PARAMETER_ERROR_CODES, request.file, content, request.original_content)
+end
+
+-- Execute all nodes with structural preflight, node-level partial commit, and final validation.
+-- 执行全部节点，落实结构预检、节点级部分提交和最终校验。
+local function execute_request(helpers, request)
+    local staged_lines = copy_lines(request.original_lines)
+    local staged_final_newline = request.had_final_newline
+    local applied_nodes = {}
+
+    for index, node in ipairs(request.nodes) do
+        if node.type == "edit" then
+            local normalized_old = helpers.normalize_newlines(node.old_content, request.newline)
+            local old_lines = select(1, helpers.split_lines_with_final_newline(normalized_old))
+            local occurrences = find_line_occurrences(request.original_lines, old_lines)
+            local current_start, current_end = calculate_mapped_range(node, applied_nodes)
+            if #occurrences ~= 1 then
+                local prefix_content = helpers.join_lines(staged_lines, staged_final_newline, request.newline)
+                local commit_scope = "none"
+                if not request.no_apply and #applied_nodes > 0 then
+                    local write_error = commit_content(helpers, request, prefix_content)
+                    if write_error then
+                        return render_global_failure(helpers, request, "write_failed", "failed to commit the successful node prefix", applied_nodes, "none", write_error), nil
+                    end
+                    commit_scope = "prefix"
+                end
+                local candidates = {}
+                -- Render only a bounded prefix while retaining the complete match count.
+                -- 只渲染有上限的候选前缀，同时保留完整匹配总数。
+                for occurrence_index, position in ipairs(occurrences) do
+                    if occurrence_index <= MAX_DIAGNOSTIC_CANDIDATES then
+                        table.insert(candidates, format_range(position, position + #old_lines - 1))
+                    end
+                end
+                local candidates_omitted = math.max(0, #occurrences - #candidates)
+                local code
+                local message
+                if #occurrences == 0 then
+                    code = "old_content_mismatch"
+                    message = "old_content does not occur in the original file"
+                else
+                    code = "old_content_not_unique"
+                    message = "old_content must occur exactly once in the original file"
+                end
+                local failure = render_node_failure(helpers, request, code, message, node, index, applied_nodes, staged_lines, commit_scope, #occurrences, candidates, candidates_omitted)
+                local host = nil
+                if #applied_nodes > 0 then
+                    local capability = helpers.resolve_host_result_capability()
+                    host = build_host_result(helpers, capability, request, prefix_content, applied_nodes, commit_scope == "prefix", commit_scope == "prefix" and "Applied successful node prefix; later node failed." or "Previewed successful node prefix; later node failed.")
+                end
+                return failure, host
+            end
+            if occurrences[1] ~= node.start_line then
+                local prefix_content = helpers.join_lines(staged_lines, staged_final_newline, request.newline)
+                local commit_scope = "none"
+                if not request.no_apply and #applied_nodes > 0 then
+                    local write_error = commit_content(helpers, request, prefix_content)
+                    if write_error then
+                        return render_global_failure(helpers, request, "write_failed", "failed to commit the successful node prefix", applied_nodes, "none", write_error), nil
+                    end
+                    commit_scope = "prefix"
+                end
+                local failure = render_node_failure(helpers, request, "old_content_mismatch", "old_content is unique but is not located at the declared original range", node, index, applied_nodes, staged_lines, commit_scope, #occurrences, { format_range(occurrences[1], occurrences[1] + #old_lines - 1) }, 0)
+                local host = nil
+                if #applied_nodes > 0 then
+                    local capability = helpers.resolve_host_result_capability()
+                    host = build_host_result(helpers, capability, request, prefix_content, applied_nodes, commit_scope == "prefix", commit_scope == "prefix" and "Applied successful node prefix; later node failed." or "Previewed successful node prefix; later node failed.")
+                end
+                return failure, host
+            end
+            local current_lines = slice_lines(staged_lines, current_start, current_end)
+            if not lines_equal(current_lines, old_lines) then
+                -- This is an internal staging invariant failure, so fail closed without prefix commit.
+                -- 这是内部暂存一致性护栏失败，必须失败关闭且不得提交前缀。
+                local prefix_content = helpers.join_lines(staged_lines, staged_final_newline, request.newline)
+                local failure = render_node_failure(helpers, request, "staged_content_mismatch", "the mapped staged range no longer contains the expected original content; no content was written", node, index, applied_nodes, staged_lines, "none", #occurrences, nil, 0)
+                local host = nil
+                if #applied_nodes > 0 then
+                    local capability = helpers.resolve_host_result_capability()
+                    host = build_host_result(helpers, capability, request, prefix_content, applied_nodes, false, "Previewed successful node prefix; internal consistency check failed.")
+                end
+                return failure, host
+            end
+            local normalized_new = helpers.normalize_newlines(node.new_content, request.newline)
+            local new_lines = helpers.split_insert_content(normalized_new)
+            replace_line_range(staged_lines, current_start, current_end, new_lines)
+            local result = build_node_result(node, current_start, current_end, #new_lines, applied_nodes)
+            table.insert(applied_nodes, result)
+        else
+            local normalized_new = helpers.normalize_newlines(node.new_content, request.newline)
+            local new_lines = helpers.split_insert_content(normalized_new)
+            local current_start = #staged_lines + 1
+            for _, line in ipairs(new_lines) do
+                table.insert(staged_lines, line)
+            end
+            local _, append_had_final_newline = helpers.split_lines_with_final_newline(normalized_new)
+            staged_final_newline = append_had_final_newline
+            local result = build_node_result(node, current_start, current_start - 1, #new_lines, applied_nodes)
+            table.insert(applied_nodes, result)
+        end
+    end
+
+    local final_content = helpers.join_lines(staged_lines, staged_final_newline, request.newline)
+    local final_validation_error = validate_final_content(helpers, request.file, final_content)
+    if final_validation_error then
+        return render_global_failure(helpers, request, "final_content_validation_failed", "final staged content failed validation; no file content was written", applied_nodes, "none", final_validation_error), nil
+    end
+
+    local apply = not request.no_apply
+    local commit_scope = apply and "all" or "none"
+    if apply then
+        local write_error = commit_content(helpers, request, final_content)
+        if write_error then
+            return render_global_failure(helpers, request, "write_failed", "failed to commit the complete edited file", applied_nodes, "none", write_error), nil
+        end
+    end
+    local status = apply and "APPLIED" or "PREVIEW_ONLY"
+    local primary = render_success(helpers, request, final_content, applied_nodes, status, commit_scope)
+    local capability = helpers.resolve_host_result_capability()
+    local host_result = build_host_result(helpers, capability, request, final_content, applied_nodes, apply, apply and "Applied 1 file with multiple nodes." or "Previewed 1 file with multiple nodes.")
+    return primary, host_result
+end
+
+-- Run the single-file edit entry and return the primary text plus optional host result.
+-- 运行单文件编辑入口并返回主文本和可选宿主结果。
 return function(args)
     local helpers = load_shared_file_helpers()
-    local requests, is_batch, validation_error = collect_requests(helpers, args)
-    if validation_error then
-        return validation_error
+    local request, shape_error = validate_request_shape(helpers, args)
+    if shape_error then
+        return shape_error
     end
-
-    local operations = {}
-    for _, request in ipairs(requests or {}) do
-        local operation, operation_error = prepare_operation(helpers, request)
-        if operation_error then
-            return operation_error
-        end
-        table.insert(operations, operation)
+    local prepared_request, prepare_error = prepare_request(helpers, request)
+    if prepare_error then
+        return prepare_error
     end
-
-    -- Default to writing unless the caller explicitly requested preview-only behavior.
-    -- 除非调用方显式请求仅预览，否则默认写入。
-    local apply = not (requests[1] and requests[1].no_apply == true)
-    if apply then
-        local write_error = apply_operations(helpers, operations)
-        if write_error then
-            return write_error
-        end
-    end
-
-    local capability = helpers.resolve_host_result_capability()
-    local host_result = build_host_result(helpers, capability, operations, apply)
-    if is_batch then
-        return render_batch_result(helpers, operations, apply), nil, nil, host_result
-    end
-    return render_single_result(helpers, operations[1]), nil, nil, host_result
+    local primary, host_result = execute_request(helpers, prepared_request)
+    return primary, nil, nil, host_result
 end

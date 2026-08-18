@@ -213,31 +213,27 @@ Boundary behavior is explicit:
 
 Use this for small text edits after the target file and target lines have been confirmed.
 
-It supports one root-level edit request or a `files` batch of up to 10 items. Batch mode is useful when several known files need coordinated text changes in one call.
+It accepts exactly one existing file per request. Put multiple coordinated positions in that file into one `nodes` array; cross-file edits use separate calls.
 
 It writes by default. Pass `no_apply=true` only when you need a preview without writing.
 
 The root `PWD` parameter may point to the current project or workspace root. When `PWD` is valid, relative `file` values resolve from it; otherwise `file` must already be absolute. `${env:NAME}` placeholders are still expanded with Lua `os.getenv` before filesystem access.
 
-Supported modes:
+Each `edit` node contains `id`, original `start_line`/`end_line`, complete `old_content`, and `new_content`. The old content must occur exactly once in the original file; an empty `new_content` deletes the range. `append` nodes contain `id`, `type`, and non-empty `new_content`, and work for empty files.
 
-- `overwrite`: replace the whole file. For backward compatibility it still creates the file when it does not exist, but `vulcan-file-create` is now the preferred entry for brand-new files; `content=""` creates or leaves an empty file.
-- `append`: append at the end of the file as new lines; if the original file is non-empty and lacks a final newline, one is inserted before the appended content.
-- `replace_range`: replace an existing 1-based closed line range; `content=""` deletes that range.
-- `insert_before`: insert before an existing 1-based anchor line.
-- `insert_after`: insert after an existing 1-based anchor line.
-- `files`: optional batch form with up to 10 per-file edit objects; do not send it together with root single-file edit arguments.
-- `no_apply`: leave false or omit to write immediately; set true only when you need a preview without writing.
+Edit nodes are sorted by original line number and append nodes run last. Overlapping edit ranges reject the complete request. If a node's content does not match or is not unique, successful earlier nodes are committed as a prefix and later nodes are reported as unexecuted. Final JSON validation happens before a complete write.
 
-`insert_before` and `insert_after` require `1 <= line <= total_lines`. Out-of-range anchors return `line_out_of_bounds`; they do not silently append. For empty files, use `overwrite` to create content or `append` for file-end additions.
+The old `overwrite`, `append`, `replace_range`, `insert_before`, and `insert_after` modes and the `files` batch field are no longer accepted. Insert-before and insert-after are expressed as one-line `edit` nodes that replace the anchor with inserted text plus the original anchor. Use `append` for an empty file.
 
 The result includes:
 
 - Whether the status is `PREVIEW_ONLY` or `APPLIED`
-- Original and edited line counts
-- Original affected span
-- Edited affected span
-- Operation-oriented diff preview
+- Original and final line counts
+- Original and final actual ranges for every node
+- The preceding node ids and deltas that caused each range shift
+- Committed prefix nodes (or staged prefix nodes in preview-only results), the failed node's mapped current content, and unexecuted later nodes when a node fails
+- Internal staging failures never write a prefix; write failures require re-reading the file because disk state may be uncertain
+- Operation-oriented multi-node diff preview
 - A canonical host `change_set` when structured host results are enabled by the host
 - Clear correction hints for parameter errors
 

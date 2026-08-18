@@ -61,6 +61,27 @@ def assert_contains(text: str, fragment: str) -> None:
 
 
 """
+Assert that one text block does not contain a forbidden fragment.
+断言文本块不包含一个禁止出现的片段。
+
+Parameters:
+    text: Source text to inspect.
+参数：
+    text：需要检查的源文本。
+    fragment: Fragment that must be absent.
+    片段：必须不存在的片段。
+
+Returns:
+    None: Raises AssertionError when the fragment is present.
+返回值：
+    None：发现禁止片段时抛出 AssertionError。
+"""
+def assert_not_contains(text: str, fragment: str) -> None:
+    if fragment in text:
+        raise AssertionError(f"Unexpected forbidden fragment: {fragment}")
+
+
+"""
 Assert that one text block does not contain CJK ideographs.
 断言一个文本块不包含中日韩统一表意文字。
 
@@ -93,7 +114,7 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.9")
+    assert_contains(skill_yaml, "version: 0.1.11")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
@@ -120,9 +141,17 @@ def test_skill_manifest_contract() -> None:
 
     edit_schema = read_text("schemas/edit.input.schema.json")
     assert_contains(edit_schema, '"PWD"')
-    assert_contains(edit_schema, '"files"')
+    assert_contains(edit_schema, '"nodes"')
+    assert_contains(edit_schema, '"old_content"')
+    assert_contains(edit_schema, '"new_content"')
+    assert_contains(edit_schema, '"const": "edit"')
+    assert_contains(edit_schema, '"const": "append"')
+    for forbidden_edit_field in ("file_hash", "node_hash", "content_hash", "checksum"):
+        assert_not_contains(edit_schema, forbidden_edit_field)
     assert_contains(edit_schema, '"no_apply"')
-    assert_contains(edit_schema, '"maxItems": 10')
+    assert_contains(edit_schema, '"maxItems": 50')
+    assert_not_contains(edit_schema, '"mode"')
+    assert_not_contains(edit_schema, '"files"')
 
     delete_schema = read_text("schemas/delete.input.schema.json")
     assert_contains(delete_schema, '"PWD"')
@@ -159,11 +188,27 @@ def test_runtime_guardrails() -> None:
     assert_contains(list_runtime, "validate_basename_pattern")
     assert_contains(list_runtime, "pattern must be a basename-only glob")
     assert_contains(list_runtime, "relative_path_requires_pwd")
-    assert_contains(edit_runtime, "line_out_of_bounds")
-    assert_contains(edit_runtime, "conflicting_batch_arguments")
+    assert_contains(edit_runtime, "multiple_files_not_supported")
+    assert_contains(edit_runtime, "too_many_nodes")
+    assert_contains(edit_runtime, "request_content_too_large")
+    assert_contains(edit_runtime, "old_content_mismatch")
+    assert_contains(edit_runtime, "old_content_not_unique")
+    assert_contains(edit_runtime, "overlapping_nodes")
+    assert_contains(edit_runtime, "commit_scope")
+    assert_contains(edit_runtime, "failed_node_id")
+    assert_contains(edit_runtime, "skipped_nodes")
+    assert_contains(edit_runtime, "staged_prefix_nodes")
+    assert_contains(edit_runtime, "final_content_validation_failed")
+    assert_contains(edit_runtime, "staged_content_mismatch")
+    assert_contains(edit_runtime, "no content was written")
+    assert_contains(edit_runtime, "candidates_omitted")
+    assert_contains(edit_runtime, "disk state uncertain")
     assert_contains(edit_runtime, "invalid_pwd_argument")
     assert_contains(edit_runtime, "invalid_no_apply_argument")
     assert_contains(edit_runtime, "apply is no longer supported")
+    for forbidden_edit_field in ("file_hash", "node_hash", "content_hash", "checksum"):
+        assert_not_contains(edit_runtime, forbidden_edit_field)
+    assert_not_contains(edit_runtime, "SUPPORTED_MODES")
     assert_contains(create_runtime, "file_already_exists")
     assert_contains(create_runtime, "parent_directory_not_found")
     assert_contains(create_runtime, "conflicting_batch_arguments")
@@ -178,6 +223,8 @@ def test_runtime_guardrails() -> None:
     assert_contains(shared_runtime, 'kind = "change_set"')
     assert_contains(shared_runtime, "allows_change_set")
     assert_contains(shared_runtime, "max_payload_bytes")
+    assert_contains(shared_runtime, 'find("\\r", 1, true)')
+    assert_contains(shared_runtime, ':gsub("\\r", "\\n")')
     assert_contains(shared_runtime, "MAX_BATCH_FILES = 10")
     assert_contains(shared_runtime, 'BINARY_FILE_PLACEHOLDER = "Binary file"')
     assert_contains(shared_runtime, "DELETE_TRUNCATE_LINE_LIMIT = 500")
@@ -229,7 +276,10 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "vulcan-file-delete")
     assert_contains(docs, "file_already_exists")
     assert_contains(docs, "parent_directory_not_found")
-    assert_contains(docs, "line_out_of_bounds")
+    assert_contains(docs, "old_content")
+    assert_contains(docs, "commit_scope")
+    assert_contains(docs, "final actual range")
+    assert_contains(docs, "节点")
     assert_contains(docs, "directory_delete_unsupported")
     assert_contains(docs, "Binary file")
     assert_contains(docs, 'content_mode="truncated"')

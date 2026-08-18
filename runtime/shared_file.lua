@@ -644,8 +644,12 @@ end
 -- 返回值：
 --     string：检测到 Windows 换行时返回 `\r\n`，否则返回 `\n`。
 local function detect_newline_sequence(content)
-    if tostring(content or ""):find("\r\n", 1, true) then
+    local text = tostring(content or "")
+    if text:find("\r\n", 1, true) then
         return "\r\n"
+    end
+    if text:find("\r", 1, true) then
+        return "\r"
     end
     return "\n"
 end
@@ -665,9 +669,11 @@ end
 -- 返回值：
 --     string：换行字符已规范化后的文本。
 local function normalize_newlines(content, newline)
-    local normalized = tostring(content or ""):gsub("\r\n", "\n")
+    local normalized = tostring(content or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
     if newline == "\r\n" then
         normalized = normalized:gsub("\n", "\r\n")
+    elseif newline == "\r" then
+        normalized = normalized:gsub("\n", "\r")
     end
     return normalized
 end
@@ -687,7 +693,7 @@ end
 --     table：数组形式的逻辑行表。
 --     boolean：原内容以换行结尾时返回 true。
 local function split_lines_with_final_newline(content)
-    local normalized = tostring(content or ""):gsub("\r\n", "\n")
+    local normalized = tostring(content or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
     local had_final_newline = normalized ~= "" and ends_with(normalized, "\n")
     if normalized == "" then
         return {}, false
@@ -1351,6 +1357,7 @@ end
 --     changed_span: Span metadata describing old and new line ranges.
 --     preview_title: Visible preview section title.
 --     max_preview_lines: Maximum preview line budget.
+--     context_content: Optional final content used for context lines and final line labels.
 -- 参数：
 --     request_mode：编辑模式，例如 overwrite 或 append。
 --     request_content：用于空预览提示的原始请求内容。
@@ -1359,41 +1366,44 @@ end
 --     changed_span：描述旧行范围与新行范围的区间元数据。
 --     preview_title：可见预览区标题。
 --     max_preview_lines：允许的最大预览行预算。
+--     context_content：可选的最终内容，用于上下文行和最终行号标记。
 --
 -- Returns:
 --     string: Markdown preview block.
 -- 返回值：
 --     string：Markdown 预览区块文本。
-local function render_operation_preview(request_mode, request_content, original_content, edited_content, changed_span, preview_title, max_preview_lines)
+local function render_operation_preview(request_mode, request_content, original_content, edited_content, changed_span, preview_title, max_preview_lines, context_content)
     local original_lines = select(1, split_lines_with_final_newline(original_content))
     local edited_lines = select(1, split_lines_with_final_newline(edited_content))
+    -- Keep deleted hunks on the original snapshot while context follows final coordinates.
+    -- 删除块继续使用原始快照，上下文则跟随最终坐标，避免内容和行号错位。
+    local context_lines = select(1, split_lines_with_final_newline(context_content or original_content))
     local original_start = changed_span.original_start_line or changed_span.start_line
     local original_end = changed_span.original_end_line or changed_span.end_line
     local edited_start = changed_span.start_line or 1
     local edited_end = changed_span.end_line or edited_start
     local inserted_line_count = tonumber(changed_span.inserted_line_count) or 0
-    local before_context_start = original_start - 3
-    local before_context_end = original_start - 1
-    local after_context_start = original_end + 1
-    local after_context_end = original_end + 3
-    local after_context_display_start = edited_start + inserted_line_count
+    local before_context_start = edited_start - 3
+    local before_context_end = edited_start - 1
+    local after_context_start = edited_start + inserted_line_count
+    local after_context_end = after_context_start + 2
     local output = {
         "## " .. tostring(preview_title or "Preview"),
         "",
         "```diff",
     }
     if request_mode == "insert_after" then
-        before_context_start = original_start - 2
-        before_context_end = original_start
+        before_context_start = edited_start - 2
+        before_context_end = edited_start
     elseif request_mode == "insert_before" then
-        after_context_start = original_start
-        after_context_end = original_start + 2
+        after_context_start = edited_start
+        after_context_end = edited_start + 2
     end
 
     local preview_limit = tonumber(max_preview_lines) or DEFAULT_MAX_PREVIEW_LINES
     local rendered = 0
     local keep_going
-    rendered, keep_going = render_context_range(output, rendered, original_lines, before_context_start, before_context_end, " ", preview_limit)
+    rendered, keep_going = render_context_range(output, rendered, context_lines, before_context_start, before_context_end, " ", preview_limit)
 
     if keep_going and (request_mode == "replace_range" or request_mode == "overwrite") then
         rendered, keep_going = render_context_range(output, rendered, original_lines, original_start, original_end, "-", preview_limit)
@@ -1404,7 +1414,7 @@ local function render_operation_preview(request_mode, request_content, original_
     end
 
     if keep_going and request_mode ~= "append" then
-        rendered, keep_going = render_context_range(output, rendered, original_lines, after_context_start, after_context_end, " ", preview_limit, after_context_display_start)
+        rendered, keep_going = render_context_range(output, rendered, context_lines, after_context_start, after_context_end, " ", preview_limit)
     end
 
     if not keep_going then
