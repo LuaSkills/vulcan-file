@@ -221,6 +221,8 @@ The root `PWD` parameter may point to the current project or workspace root. Whe
 
 Each `edit` node contains `id`, original `start_line`/`end_line`, complete `old_content`, and `new_content`. The old content must occur exactly once in the original file; an empty `new_content` deletes the range. `append` nodes contain `id`, `type`, and non-empty `new_content`, and work for empty files.
 
+The optional root `line_tolerance` defaults to `0` and keeps exact range matching. When an AI knows that line numbers may be stale, it can pass a non-negative value such as `50`; the runtime then expands each declared range upward and downward by that many logical lines and accepts only a complete, globally unique `old_content` match inside the expanded range. The result reports the declared range, actual matched range, and final range.
+
 Edit nodes are sorted by original line number and append nodes run last. Overlapping edit ranges reject the complete request. If a node's content does not match or is not unique, successful earlier nodes are committed as a prefix and later nodes are reported as unexecuted. Final JSON validation happens before a complete write.
 
 The old `overwrite`, `append`, `replace_range`, `insert_before`, and `insert_after` modes and the `files` batch field are no longer accepted. Insert-before and insert-after are expressed as one-line `edit` nodes that replace the anchor with inserted text plus the original anchor. Use `append` for an empty file.
@@ -231,11 +233,13 @@ The result includes:
 - Original and final line counts
 - Original and final actual ranges for every node
 - The preceding node ids and deltas that caused each range shift
+- Tolerant matches show the declared range, actual matched original range, and final range
 - Committed prefix nodes (or staged prefix nodes in preview-only results), the failed node's mapped current content, and unexecuted later nodes when a node fails
 - Internal staging failures never write a prefix; write failures require re-reading the file because disk state may be uncertain
 - Operation-oriented multi-node diff preview
 - Multi-node previews explicitly label `[original]` deletion coordinates and `[final]` context or insertion coordinates
 - Host `change_set` hunks use final-file context while retaining original deletion content
+- Tolerant host hunks retain `original_range` and add `matched_original_range` with `match_mode`
 - Final JSON validation details are compact single-line diagnostics
 - A canonical host `change_set` when structured host results are enabled by the host
 - Clear correction hints for parameter errors

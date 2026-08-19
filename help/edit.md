@@ -10,6 +10,7 @@ The request edits exactly one file. Multiple positions in that file belong in on
 {
   "PWD": "/workspace/project",
   "file": "src/example.rs",
+  "line_tolerance": 0,
   "no_apply": false,
   "nodes": [
     {
@@ -31,12 +32,14 @@ The request edits exactly one file. Multiple positions in that file belong in on
 
 `PWD` remains the optional project root for relative file paths. `no_apply=true` runs the full preview and validation flow without writing. It applies to the whole request.
 
+`line_tolerance` is an optional non-negative number of logical lines used when the supplied line numbers may be stale. It defaults to `0`, which requires the unique `old_content` block to match the declared `start_line`/`end_line` exactly. When it is greater than `0`, the runtime expands that range upward and downward by the given number of lines and accepts the edit only when the complete, globally unique `old_content` match fits inside the expanded range. For example, `line_tolerance=50` permits a match within 50 lines above or below the declared range.
+
 ## Node rules
 
 - Every node needs a unique `id`.
 - An `edit` node uses the original file's 1-based inclusive `start_line` and `end_line`.
 - `old_content` must contain the complete original logical-line block, not only the word being changed.
-- The old block must occur exactly once in the original file and must match the declared original range.
+- The old block must occur exactly once in the original file. With the default `line_tolerance=0`, it must match the declared original range; with a positive tolerance, its complete range may be inside the expanded search range.
 - `new_content` replaces the range. An empty `new_content` deletes the range.
 - An `append` node has only `id`, `type`, and non-empty `new_content`. It runs after all edit nodes and also works for an empty file.
 - Edit nodes are sorted by original start line before execution. Append nodes stay after edits in their request order.
@@ -54,7 +57,7 @@ The old `insert_before` and `insert_after` modes are no longer accepted. Express
 
 ## Results and failure recovery
 
-Results list nodes in original-line order and show both `original_range` and the final actual range. If earlier nodes changed line counts, the result explicitly lists the source node ids, each `delta`, and the cumulative shift.
+Results list nodes in original-line order and show both `original_range` and the final actual range. If earlier nodes changed line counts, the result explicitly lists the source node ids, each `delta`, and the cumulative shift. A tolerant match also reports the declared range, the actual matched original range, and the configured tolerance.
 
 Multi-node previews label deleted lines with `[original]` coordinates and context or inserted lines with `[final]` coordinates. Host `change_set` hunks use original content for deletion and final content for before/after context.
 
@@ -70,6 +73,6 @@ After a prefix commit, re-read the file before retrying remaining edits. Do not 
 
 Final JSON validation failures keep a single-line decoder detail; nested Markdown and stack traces are not returned inside `detail`.
 
-The optional host `change_set` result is preserved. It contains one file record with one hunk per applied or previewed node, and hunk line numbers refer to the final staged or committed content.
+The optional host `change_set` result is preserved. It contains one file record with one hunk per applied or previewed node, and hunk line numbers refer to the final staged or committed content. For a tolerant edit, the hunk keeps the declared `original_range` and also reports the actual `matched_original_range` plus `match_mode`.
 
 Use `vulcan-codekit-patch` for whole-function or whole-method replacement when structural source understanding is required.

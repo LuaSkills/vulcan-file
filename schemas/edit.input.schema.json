@@ -11,6 +11,12 @@
       "minLength": 1,
       "description": "The one existing file to edit. A request edits exactly one file; use nodes for multiple positions in that file."
     },
+    "line_tolerance": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Optional non-negative tolerance in logical lines for stale start_line/end_line values. The old_content block must still occur exactly once in the original file. When this value is greater than 0, the runtime may accept that unique match only when its complete range falls within the declared range expanded upward and downward by line_tolerance lines. The default 0 requires an exact range match."
+    },
     "no_apply": {
       "type": "boolean",
       "description": "When true, run the complete structural and node-level simulation and return preview output without writing. The flag applies to the whole request."

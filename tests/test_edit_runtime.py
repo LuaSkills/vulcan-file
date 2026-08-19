@@ -242,6 +242,40 @@ class EditRuntimeTests(unittest.TestCase):
             self.assertEqual(hunks[2]["before"], "gamma\ndelta\nepsilon-new")
             self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\ngamma\ndelta\nepsilon\n")
 
+    def test_tolerant_host_hunk_reports_declared_and_matched_ranges(self) -> None:
+        """Verify tolerant host hunks preserve both original coordinate meanings.
+        验证宽限制宿主 hunk 同时保留声明坐标和实际命中坐标。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tolerant-host.txt"
+            self.write_file(path, "alpha\nbeta\ngamma\n")
+            content, host_result = self.call_edit(
+                {
+                    "file": str(path),
+                    "line_tolerance": 1,
+                    "no_apply": True,
+                    "nodes": [
+                        {
+                            "id": "shifted",
+                            "type": "edit",
+                            "start_line": 1,
+                            "end_line": 1,
+                            "old_content": "beta",
+                            "new_content": "beta-new",
+                        }
+                    ],
+                },
+                enable_host_result=True,
+            )
+            self.assertIn("PREVIEW_ONLY", content)
+            assert host_result is not None
+            hunk = host_result["payload"]["files"][0]["hunks"][0]
+            self.assertEqual(hunk["original_range"], "L1-L1")
+            self.assertEqual(hunk["matched_original_range"], "L2-L2")
+            self.assertEqual(hunk["match_mode"], "tolerant")
+            self.assertEqual(hunk["final_range"], "L2-L2")
+            self.assertEqual(path.read_text(encoding="utf-8"), "alpha\nbeta\ngamma\n")
+
     def test_node_failure_commits_only_successful_prefix(self) -> None:
         """Verify a node failure commits the successful prefix and skips later nodes.
         验证节点失败时只提交成功前缀并跳过后续节点。
@@ -639,7 +673,78 @@ class EditRuntimeTests(unittest.TestCase):
                 }
             )
             self.assertIn("old_content_mismatch", content)
+            self.assertIn("line_tolerance: `0`", content)
             self.assertIn("L2-L2", content)
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
+    def test_line_tolerance_accepts_unique_match_with_stale_range(self) -> None:
+        """Verify explicit tolerance accepts stale ranges on either side of a file.
+        验证显式容差可以接受文件两侧的过期行号范围。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            lower_path = Path(directory) / "lower-shift.txt"
+            self.write_file(lower_path, "alpha\nbeta\ngamma\n")
+            lower_content = self.call_edit(
+                {
+                    "file": str(lower_path),
+                    "line_tolerance": 1,
+                    "nodes": [
+                        {
+                            "id": "lower-shift",
+                            "type": "edit",
+                            "start_line": 1,
+                            "end_line": 1,
+                            "old_content": "beta",
+                            "new_content": "beta-new",
+                        }
+                    ],
+                }
+            )
+            self.assertIn("APPLIED", lower_content)
+            self.assertIn("line_tolerance: `1`", lower_content)
+            self.assertIn("original `L1-L1` -> final `L2-L2`", lower_content)
+            self.assertIn("tolerant_match: declared `L1-L1`, matched `L2-L2` within ±1 lines", lower_content)
+            self.assertEqual(lower_path.read_text(encoding="utf-8"), "alpha\nbeta-new\ngamma\n")
+
+            upper_path = Path(directory) / "upper-shift.txt"
+            self.write_file(upper_path, "alpha\nbeta\ngamma\n")
+            upper_content = self.call_edit(
+                {
+                    "file": str(upper_path),
+                    "line_tolerance": 1,
+                    "nodes": [
+                        {
+                            "id": "upper-shift",
+                            "type": "edit",
+                            "start_line": 4,
+                            "end_line": 4,
+                            "old_content": "gamma",
+                            "new_content": "gamma-new",
+                        }
+                    ],
+                }
+            )
+            self.assertIn("APPLIED", upper_content)
+            self.assertIn("original `L4-L4` -> final `L3-L3`", upper_content)
+            self.assertIn("tolerant_match: declared `L4-L4`, matched `L3-L3` within ±1 lines", upper_content)
+            self.assertEqual(upper_path.read_text(encoding="utf-8"), "alpha\nbeta\ngamma-new\n")
+
+    def test_line_tolerance_must_be_non_negative(self) -> None:
+        """Verify invalid tolerance values are rejected before any write.
+        验证非法容差值会在写盘前被拒绝。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid-tolerance.txt"
+            original = "alpha\n"
+            self.write_file(path, original)
+            content = self.call_edit(
+                {
+                    "file": str(path),
+                    "line_tolerance": -1,
+                    "nodes": [{"id": "append", "type": "append", "new_content": "beta"}],
+                }
+            )
+            self.assertIn("invalid_line_tolerance_argument", content)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
 
     def test_duplicate_id_and_append_field_guards_reject_before_write(self) -> None:

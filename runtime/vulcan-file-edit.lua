@@ -24,6 +24,10 @@ local MAX_REQUEST_CONTENT_BYTES = 131072
 -- 单次唯一性诊断允许渲染的最大候选范围数量。
 local MAX_DIAGNOSTIC_CANDIDATES = 20
 
+-- Default line tolerance; zero preserves strict declared-range matching.
+-- 默认行号容差；零值保持严格的声明范围匹配。
+local DEFAULT_LINE_TOLERANCE = 0
+
 -- Error codes that indicate invalid arguments or request-level rejection.
 -- 表示参数无效或请求级拒绝的错误码集合。
 local PARAMETER_ERROR_CODES = {
@@ -36,6 +40,7 @@ local PARAMETER_ERROR_CODES = {
     relative_path_requires_pwd = true,
     invalid_apply_argument = true,
     invalid_no_apply_argument = true,
+    invalid_line_tolerance_argument = true,
     multiple_files_not_supported = true,
     invalid_nodes_argument = true,
     empty_nodes = true,
@@ -138,6 +143,24 @@ local function parse_positive_line(helpers, value, field_name, node_index)
     return line, nil
 end
 
+-- Parse the optional non-negative line tolerance used for stale line numbers.
+-- 解析用于处理过期行号的可选非负行号容差。
+local function parse_line_tolerance(helpers, value)
+    if value == nil then
+        return DEFAULT_LINE_TOLERANCE, nil
+    end
+    local tolerance, argument_error = helpers.parse_integer_argument(ERROR_TITLE, PARAMETER_ERROR_CODES, value, "line_tolerance")
+    if argument_error then
+        return nil, argument_error
+    end
+    if tolerance < 0 then
+        return nil, render_error(helpers, "invalid_line_tolerance_argument", "line_tolerance must be a non-negative integer", {
+            value = tostring(tolerance),
+        })
+    end
+    return tolerance, nil
+end
+
 -- Copy an array-style line table without sharing mutable entries.
 -- 复制数组形式的行表，避免共享可变元素。
 local function copy_lines(lines)
@@ -192,6 +215,24 @@ local function find_line_occurrences(lines, target)
     return positions
 end
 
+-- Resolve one globally unique match against the declared range and tolerance window.
+-- 将全局唯一匹配与声明范围及容差窗口进行解析。
+local function resolve_unique_match_range(node, original_line_count, old_line_count, occurrences, line_tolerance)
+    local tolerance = tonumber(line_tolerance) or DEFAULT_LINE_TOLERANCE
+    local allowed_start = math.max(1, node.start_line - tolerance)
+    local allowed_end = math.min(original_line_count, node.end_line + tolerance)
+    if #occurrences ~= 1 then
+        return nil, nil, "unresolved", allowed_start, allowed_end
+    end
+    local matched_start = occurrences[1]
+    local matched_end = matched_start + old_line_count - 1
+    if matched_start < allowed_start or matched_end > allowed_end then
+        return nil, nil, "outside_tolerance", allowed_start, allowed_end
+    end
+    local match_mode = matched_start == node.start_line and matched_end == node.end_line and "strict" or "tolerant"
+    return matched_start, matched_end, match_mode, allowed_start, allowed_end
+end
+
 -- Format one inclusive line range for human-readable diagnostics.
 -- 将闭合行号范围格式化为可读诊断文本。
 local function format_range(start_line, end_line)
@@ -227,7 +268,8 @@ end
 local function calculate_mapped_range(node, applied_nodes)
     local shift = 0
     for _, result in ipairs(applied_nodes or {}) do
-        if result.original_end_line < node.start_line then
+        local matched_original_end = result.matched_original_end_line or result.original_end_line
+        if matched_original_end < node.start_line then
             shift = shift + (tonumber(result.delta) or 0)
         end
     end
@@ -321,6 +363,7 @@ local function validate_request_shape(helpers, args)
     local allowed_root_fields = {
         PWD = true,
         file = true,
+        line_tolerance = true,
         no_apply = true,
         nodes = true,
     }
@@ -335,6 +378,10 @@ local function validate_request_shape(helpers, args)
     local no_apply_error = helpers.validate_optional_boolean(ERROR_TITLE, PARAMETER_ERROR_CODES, raw.no_apply, "no_apply")
     if no_apply_error then
         return nil, no_apply_error
+    end
+    local line_tolerance, line_tolerance_error = parse_line_tolerance(helpers, raw.line_tolerance)
+    if line_tolerance_error then
+        return nil, line_tolerance_error
     end
     local pwd_root, pwd_error = helpers.resolve_pwd_root(ERROR_TITLE, PARAMETER_ERROR_CODES, raw.PWD)
     if pwd_error then
@@ -480,6 +527,7 @@ local function validate_request_shape(helpers, args)
 
     return {
         file = file_path,
+        line_tolerance = line_tolerance,
         no_apply = raw.no_apply == true,
         nodes = nodes,
         content_bytes = content_bytes,
@@ -505,7 +553,7 @@ local function prepare_request(helpers, request)
                     node_index = tostring(node.original_index),
                 })
             end
-            if node.end_line > #original_lines then
+            if node.end_line > #original_lines and request.line_tolerance == 0 then
                 return nil, render_error(helpers, "invalid_edit_range", "edit range must be inside the original file line range", {
                     node_id = node.id,
                     node_index = tostring(node.original_index),
@@ -555,8 +603,10 @@ end
 
 -- Build a node result with original, current, final, and shift metadata.
 -- 构造包含原始、当前、最终范围和偏移元数据的节点结果。
-local function build_node_result(node, current_start, current_end, new_line_count, applied_nodes)
-    local old_line_count = node.type == "edit" and (node.end_line - node.start_line + 1) or 0
+local function build_node_result(node, current_start, current_end, new_line_count, applied_nodes, matched_start_line, matched_end_line, match_mode)
+    local matched_start = node.type == "edit" and (matched_start_line or node.start_line) or current_start
+    local matched_end = node.type == "edit" and (matched_end_line or node.end_line) or (current_start - 1)
+    local old_line_count = node.type == "edit" and (matched_end - matched_start + 1) or 0
     local delta = node.type == "edit" and (new_line_count - old_line_count) or new_line_count
     local final_start = current_start
     local final_end = new_line_count > 0 and (current_start + new_line_count - 1) or (current_start - 1)
@@ -566,6 +616,9 @@ local function build_node_result(node, current_start, current_end, new_line_coun
         original_index = node.original_index,
         original_start_line = node.type == "edit" and node.start_line or nil,
         original_end_line = node.type == "edit" and node.end_line or nil,
+        matched_original_start_line = node.type == "edit" and matched_start or nil,
+        matched_original_end_line = node.type == "edit" and matched_end or nil,
+        match_mode = node.type == "edit" and (match_mode or "strict") or nil,
         current_start_line = current_start,
         current_end_line = current_end,
         start_line = final_start,
@@ -580,8 +633,8 @@ local function build_node_result(node, current_start, current_end, new_line_coun
         changed_span = {
             start_line = final_start,
             end_line = final_end,
-            original_start_line = node.type == "edit" and node.start_line or current_start,
-            original_end_line = node.type == "edit" and node.end_line or (current_start - 1),
+            original_start_line = matched_start,
+            original_end_line = matched_end,
             inserted_line_count = new_line_count,
         },
     }
@@ -651,6 +704,8 @@ local function build_multi_modify_record(helpers, request, final_content, node_r
             for _, hunk in ipairs(single.hunks) do
                 hunk.node_id = result.id
                 hunk.original_range = result.type == "edit" and format_range(result.original_start_line, result.original_end_line) or "append"
+                hunk.matched_original_range = result.type == "edit" and format_range(result.matched_original_start_line, result.matched_original_end_line) or "append"
+                hunk.match_mode = result.match_mode or "none"
                 hunk.final_range = result.final_range
                 hunk.delta = result.delta
                 hunk.shifted_by = result.shifted_by
@@ -708,6 +763,7 @@ local function render_success(helpers, request, final_content, node_results, sta
         "- commit_scope: `" .. commit_scope .. "`",
         "- committed: `" .. tostring(commit_scope ~= "none") .. "`",
         "- file: `" .. request.file .. "`",
+        "- line_tolerance: `" .. tostring(request.line_tolerance) .. "`",
         "- original_lines: `" .. tostring(#original_lines) .. "`",
         "- final_lines: `" .. tostring(#final_lines) .. "`",
         "- node_order: `original_start_line ascending; append nodes last`",
@@ -717,6 +773,9 @@ local function render_success(helpers, request, final_content, node_results, sta
     for index, result in ipairs(node_results) do
         table.insert(lines, string.format("%d. `%s` (%s): original `%s` -> final `%s`, delta `%+d`", index, result.id, result.type, result.type == "edit" and format_range(result.original_start_line, result.original_end_line) or "append", result.final_range, result.delta))
         table.insert(lines, "   - shift: " .. describe_shift(result))
+        if result.match_mode == "tolerant" then
+            table.insert(lines, string.format("   - tolerant_match: declared `%s`, matched `%s` within ±%d lines", format_range(result.original_start_line, result.original_end_line), format_range(result.matched_original_start_line, result.matched_original_end_line), request.line_tolerance))
+        end
         if result.final_anchor_line then
             table.insert(lines, "   - final_anchor_line: `L" .. tostring(result.final_anchor_line) .. "`")
         end
@@ -750,6 +809,8 @@ local function render_node_failure(helpers, request, error_code, message, failed
         failed_node_index = tostring(failed_node.original_index),
         failed_node_intent = failed_node.type == "edit" and ("edit " .. format_range(failed_node.start_line, failed_node.end_line)) or "append",
         original_range = failed_node.type == "edit" and format_range(failed_node.start_line, failed_node.end_line) or "append",
+        line_tolerance = tostring(request.line_tolerance),
+        search_range = failed_node.type == "edit" and format_range(math.max(1, failed_node.start_line - request.line_tolerance), math.min(#request.original_lines, failed_node.end_line + request.line_tolerance)) or "end-of-file",
         mapped_current_range = failed_node.type == "edit" and format_range(current_start, current_end) or "end-of-file",
         actual_content_at_mapped_range = actual_content,
         match_count = match_count and tostring(match_count) or "not evaluated",
@@ -802,7 +863,7 @@ local function execute_request(helpers, request)
             local normalized_old = helpers.normalize_newlines(node.old_content, request.newline)
             local old_lines = select(1, helpers.split_lines_with_final_newline(normalized_old))
             local occurrences = find_line_occurrences(request.original_lines, old_lines)
-            local current_start, current_end = calculate_mapped_range(node, applied_nodes)
+            local match_start, match_end, match_mode = resolve_unique_match_range(node, #request.original_lines, #old_lines, occurrences, request.line_tolerance)
             if #occurrences ~= 1 then
                 local prefix_content = helpers.join_lines(staged_lines, staged_final_newline, request.newline)
                 local commit_scope = "none"
@@ -839,7 +900,7 @@ local function execute_request(helpers, request)
                 end
                 return failure, host
             end
-            if occurrences[1] ~= node.start_line then
+            if not match_start then
                 local prefix_content = helpers.join_lines(staged_lines, staged_final_newline, request.newline)
                 local commit_scope = "none"
                 if not request.no_apply and #applied_nodes > 0 then
@@ -849,13 +910,32 @@ local function execute_request(helpers, request)
                     end
                     commit_scope = "prefix"
                 end
-                local failure = render_node_failure(helpers, request, "old_content_mismatch", "old_content is unique but is not located at the declared original range", node, index, applied_nodes, staged_lines, commit_scope, #occurrences, { format_range(occurrences[1], occurrences[1] + #old_lines - 1) }, 0)
+                local failure = render_node_failure(helpers, request, "old_content_mismatch", "old_content is unique but is outside the declared range and line_tolerance window", node, index, applied_nodes, staged_lines, commit_scope, #occurrences, { format_range(occurrences[1], occurrences[1] + #old_lines - 1) }, 0)
                 local host = nil
                 if #applied_nodes > 0 then
                     local capability = helpers.resolve_host_result_capability()
                     host = build_host_result(helpers, capability, request, prefix_content, applied_nodes, commit_scope == "prefix", commit_scope == "prefix" and "Applied successful node prefix; later node failed." or "Previewed successful node prefix; later node failed.")
                 end
                 return failure, host
+            end
+            local matched_node = {
+                start_line = match_start,
+                end_line = match_end,
+            }
+            local current_start, current_end = calculate_mapped_range(matched_node, applied_nodes)
+            for _, applied in ipairs(applied_nodes) do
+                local applied_start = applied.matched_original_start_line or applied.original_start_line
+                local applied_end = applied.matched_original_end_line or applied.original_end_line
+                if applied_start <= match_end and match_start <= applied_end then
+                    return render_error(helpers, "overlapping_nodes", "resolved original content ranges overlap; the complete request is rejected", {
+                        first_node_id = applied.id,
+                        first_range = format_range(applied_start, applied_end),
+                        second_node_id = node.id,
+                        second_range = format_range(match_start, match_end),
+                        overlap_range = format_range(math.max(applied_start, match_start), math.min(applied_end, match_end)),
+                        commit_scope = "none",
+                    }), nil
+                end
             end
             local current_lines = slice_lines(staged_lines, current_start, current_end)
             if not lines_equal(current_lines, old_lines) then
@@ -873,7 +953,7 @@ local function execute_request(helpers, request)
             local normalized_new = helpers.normalize_newlines(node.new_content, request.newline)
             local new_lines = helpers.split_insert_content(normalized_new)
             replace_line_range(staged_lines, current_start, current_end, new_lines)
-            local result = build_node_result(node, current_start, current_end, #new_lines, applied_nodes)
+            local result = build_node_result(node, current_start, current_end, #new_lines, applied_nodes, match_start, match_end, match_mode)
             table.insert(applied_nodes, result)
         else
             local normalized_new = helpers.normalize_newlines(node.new_content, request.newline)

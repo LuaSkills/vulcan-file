@@ -1,5 +1,5 @@
 name: vulcan-file
-version: 0.1.12
+version: 0.1.13
 debug: false
 help:
   main:
@@ -41,7 +41,7 @@ entries:
     help: list
     input_schema_file: schemas/list.input.schema.json
   - name: edit
-    description: "[AI FILE EDIT] Use after reading one existing file. Submit one file plus an ordered nodes array of edit/append nodes with original line ranges and complete old_content guards. Multiple edit nodes are supported in one file; overlapping ranges reject the request, node content failures commit only the successful prefix, and no_apply=true previews without writing."
+    description: "[AI FILE EDIT] Use after reading one existing file. Submit one file plus an ordered nodes array of edit/append nodes with original line ranges and complete old_content guards. Multiple edit nodes are supported in one file; line_tolerance defaults to 0 and can be supplied to accept a unique old_content match within an expanded stale-line window; overlapping ranges reject the request, node content failures commit only the successful prefix, and no_apply=true previews without writing."
     lua_entry: runtime/vulcan-file-edit.lua
     lua_module: vulcan_file_edit
     help: edit
