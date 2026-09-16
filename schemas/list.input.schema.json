@@ -4,11 +4,11 @@
   "properties": {
     "PWD": {
       "type": "string",
-      "description": "Optional project or workspace root used by the PWD convention. Accepts absolute POSIX, drive-letter, UNC, and translated Windows device paths such as /repo, D:\\work, D:/work, or //?/D:/work. Empty or non-directory values are treated as absent; when absent, path must already be absolute."
+      "description": "Optional project or workspace root used by the PWD convention. Accepts absolute POSIX, drive-letter, UNC, and translated Windows device paths such as /repo, D:\\work, D:/work, or //?/D:/work. Empty or non-directory values are treated as absent; when absent, path must already be absolute. With a valid PWD and a relative path query, listed paths are relative to PWD."
     },
     "path": {
       "type": "string",
-      "description": "Use the narrowest directory that may contain the target files. Supports ${env:NAME} placeholders. When PWD resolves to an existing directory, relative path values are resolved from that root and omitting path scans from PWD; otherwise path must already be absolute."
+      "description": "Use the narrowest directory that may contain the target files. Supports ${env:NAME} placeholders. When PWD resolves to an existing directory, relative path values are resolved from that root and omitting path scans from PWD; returned file paths remain relative to PWD. Otherwise path must already be absolute."
     },
     "pattern": {
       "type": "string",

@@ -1,5 +1,5 @@
 name: vulcan-file
-version: 0.1.13
+version: 0.1.14
 debug: false
 help:
   main:
@@ -35,7 +35,7 @@ entries:
     help: read
     input_schema_file: schemas/read.input.schema.json
   - name: list
-    description: "[AI FILE LIST] Use before reading when you need to find candidate files cheaply. Prefer this over shell directory loops for a compact ignored-aware file map. Use codekit tools instead when you need AST structure."
+    description: "[AI FILE LIST] Find candidate files with ignore-aware directory groups. [D] marks directories and [F] marks files with B/KB/MB/GB sizes. With a valid PWD and a relative path query, results are relative to PWD. Use codekit tools instead when you need AST structure."
     lua_entry: runtime/vulcan-file-list.lua
     lua_module: vulcan_file_list
     help: list

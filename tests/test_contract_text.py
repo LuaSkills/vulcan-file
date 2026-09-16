@@ -114,7 +114,7 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.13")
+    assert_contains(skill_yaml, "version: 0.1.14")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")

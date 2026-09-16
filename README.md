@@ -92,7 +92,7 @@ In short:
 
 Use this when the target file is not known yet and you need a low-token file map first.
 
-It returns a compact directory-grouped file list, supports basename-only filename globs, and respects a common `.gitignore` / `.ignore` subset plus built-in high-noise directory ignores by default.
+It returns a directory-grouped file list, supports basename-only filename globs, and respects a common `.gitignore` / `.ignore` subset plus built-in high-noise directory ignores by default.
 
 Good fits:
 
@@ -104,11 +104,13 @@ Good fits:
 Typical parameters:
 
 - `path`: scan root; pass the narrowest plausible directory. Path values may include `${env:NAME}` placeholders.
-- `PWD`: optional shared project or workspace root. Relative `path` values are resolved from `PWD` when it points to an existing directory; otherwise `path` must already be absolute. If `path` is omitted, the scan starts from `PWD`.
+- `PWD`: optional shared project or workspace root. Relative `path` values are resolved from `PWD` when it points to an existing directory; otherwise `path` must already be absolute. If `path` is omitted, the scan starts from `PWD`. For these relative queries, returned paths are relative to `PWD`.
 - `pattern`: basename-only filename glob, such as `*.lua`, `*.md`, or `Cargo.*`; use `path` instead of `src/*.lua` or `**/*.md` when narrowing directories.
 - `recursive`: recursive by default; set to `false` for direct children only.
 - `noignore`: set to `true` only when ignored or generated files are intentionally needed; this disables both ignore files and built-in high-noise directory skips.
 - `limit`: cap the number of returned candidate files; defaults to 1000 and accepts up to 100000.
+
+The result uses `[D]` for directory groups and `[F]` for files. Each file line includes its relative path and a size in B, KB, MB, or GB (1024-based); entries without file-size metadata show `size unavailable`.
 
 This is not a content search tool. If you have a log line, error string, function name, or text anchor, use `vulcan-codekit-rg` first.
 
@@ -390,7 +392,7 @@ Recommended local release steps:
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.3
+.\scripts\tag_release.ps1 0.1.14
 ```
 
 Unix-like shell:
@@ -398,7 +400,7 @@ Unix-like shell:
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.3
+./scripts/tag_release.sh 0.1.14
 ```
 
 ## One-Sentence Summary

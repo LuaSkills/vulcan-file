@@ -90,7 +90,7 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 
 在还不知道目标文件在哪里时，先看一个低 token 的文件名地图。
 
-它返回按目录分组的紧凑文件列表，支持 basename-only 文件名 glob，并默认遵守 `.gitignore` / `.ignore` 常见规则子集和内建高噪声目录忽略规则。
+它返回按目录分组的文件列表，支持 basename-only 文件名 glob，并默认遵守 `.gitignore` / `.ignore` 常见规则子集和内建高噪声目录忽略规则。
 
 适合场景：
 
@@ -102,11 +102,13 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 典型参数：
 
 - `path`：扫描根目录，应该尽量传最小可能目录；路径值可以包含 `${env:NAME}` 占位符
-- `PWD`：可选的共享项目/工作区根目录。只有当它指向已存在目录时，相对 `path` 才会基于它解析；否则 `path` 必须本身就是绝对路径。不传 `path` 时会直接从 `PWD` 开始扫描。
+- `PWD`：可选的共享项目/工作区根目录。只有当它指向已存在目录时，相对 `path` 才会基于它解析；否则 `path` 必须本身就是绝对路径。不传 `path` 时会直接从 `PWD` 开始扫描。这类相对路径查询返回的路径也相对于 `PWD`。
 - `pattern`：basename-only 文件名 glob，例如 `*.lua`、`*.md`、`Cargo.*`；只匹配文件名本身，不能传 `src/*.lua` 或 `**/*.md`，需要缩小目录时使用 `path`
 - `recursive`：默认递归；只看直接子项时设为 `false`
 - `noignore`：只有确实需要看生成物或被忽略目录时才设为 `true`；设为 `true` 会同时关闭 ignore 文件规则和内建高噪声目录忽略
 - `limit`：控制最多返回多少候选文件；默认 1000，最大 100000
+
+结果使用 `[D]` 标记目录分组、`[F]` 标记文件。每个文件显示相对路径及按 1024 换算的 B、KB、MB 或 GB 尺寸；缺少文件尺寸元数据时显示 `size unavailable`。
 
 它不是内容搜索工具。如果你手里有日志、错误串、函数名或文本锚点，应该先用 `vulcan-codekit-rg`。
 
@@ -388,7 +390,7 @@ python .\scripts\package_skill.py --emit-source-yaml
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.3
+.\scripts\tag_release.ps1 0.1.14
 ```
 
 Unix-like shell：
@@ -396,7 +398,7 @@ Unix-like shell：
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.3
+./scripts/tag_release.sh 0.1.14
 ```
 
 ## 一句话总结

@@ -1,16 +1,12 @@
 --[[
 vulcan-file-list
-Return a compact, directory-grouped file-name map for AI navigation.
-返回紧凑的按目录分组文件名地图，供 AI 快速导航。
+Return a directory-grouped file map with relative paths, type markers, and sizes.
+返回按目录分组、包含相对路径、类型标记与尺寸的文件地图。
 ]]
 
 -- Default maximum number of matched files rendered by one list call.
 -- 单次列表调用默认最多渲染的匹配文件数量。
 local DEFAULT_LIMIT = 1000
-
--- Maximum visual width for one compact directory line before wrapping.
--- 单个紧凑目录行换行前的最大可视宽度。
-local MAX_LINE_WIDTH = 96
 
 -- Maximum accepted list limit for one tool call.
 -- 单次工具调用接受的最大列表上限。
@@ -451,7 +447,23 @@ end
 
 -- Record one file into a directory-grouped result table.
 -- 将一个文件记录到按目录分组的结果表。
-local function add_grouped_file(groups, root_path, full_path)
+--
+-- Parameters:
+--     groups: Directory groups being collected.
+--     root_path: Base directory used for displayed relative paths.
+--     full_path: Absolute path of the matched file.
+--     size_text: Human-readable size or an explicit unavailable marker.
+-- 参数：
+--     groups：正在收集的目录分组。
+--     root_path：展示相对路径所依据的根目录。
+--     full_path：匹配文件的绝对路径。
+--     size_text：可读尺寸或明确的不可用标记。
+--
+-- Returns:
+--     nil: The matching file is appended to its directory group.
+-- 返回值：
+--     nil：将匹配文件加入对应目录分组。
+local function add_grouped_file(groups, root_path, full_path, size_text)
     local rel = relative_path(root_path, full_path)
     local dir, file_name = rel:match("^(.*)/([^/]+)$")
     dir = dir or "."
@@ -459,7 +471,68 @@ local function add_grouped_file(groups, root_path, full_path)
     if groups[dir] == nil then
         groups[dir] = {}
     end
-    table.insert(groups[dir], file_name)
+    table.insert(groups[dir], { path = rel, name = file_name, size = size_text })
+end
+
+-- Format a regular file's byte count using binary B, KB, MB, or GB units.
+-- 使用二进制换算将普通文件字节数格式化为 B、KB、MB 或 GB。
+--
+-- Parameters:
+--     size_bytes: Non-negative file size returned by vulcan.fs.stat.
+-- 参数：
+--     size_bytes：vulcan.fs.stat 返回的非负文件字节数。
+--
+-- Returns:
+--     string: Compact human-readable size.
+-- 返回值：
+--     string：紧凑的可读尺寸。
+local function format_file_size(size_bytes)
+    if size_bytes < 1024 then
+        return string.format("%d B", size_bytes)
+    end
+
+    -- Keep GB as the largest unit because the public list contract uses four units.
+    -- GB 是列表公开契约中的最大单位，因此更大文件继续以 GB 展示。
+    -- Available units and current scaled value for binary conversion.
+    -- 二进制换算使用的单位表和当前缩放值。
+    local units = { "KB", "MB", "GB" }
+    local scaled_size = size_bytes / 1024
+    local unit_index = 1
+    while scaled_size >= 1024 and unit_index < #units do
+        scaled_size = scaled_size / 1024
+        unit_index = unit_index + 1
+    end
+    -- Trim insignificant decimal zeros so exact multiples remain concise.
+    -- 移除无意义的小数尾零，使整倍数尺寸保持简洁。
+    local compact_size = string.format("%.2f", scaled_size):gsub("%.?0+$", "")
+    return compact_size .. " " .. units[unit_index]
+end
+
+-- Read one matched file's size without reading its content.
+-- 不读取文件内容，取得一个匹配文件的尺寸。
+--
+-- Parameters:
+--     full_path: Absolute path of the matched file.
+-- 参数：
+--     full_path：匹配文件的绝对路径。
+--
+-- Returns:
+--     string|nil: Human-readable size, or nil on a metadata error.
+--     string|nil: Markdown error text when metadata lookup fails.
+-- 返回值：
+--     string|nil：可读尺寸；元数据读取失败时为 nil。
+--     string|nil：元数据读取失败时的 Markdown 错误文本。
+local function read_file_size(full_path)
+    -- The documented stat result carries byte size for regular files only.
+    -- 文档规定 stat 仅为普通文件提供字节尺寸。
+    local ok, metadata = pcall(vulcan.fs.stat, full_path)
+    if not ok or type(metadata) ~= "table" then
+        return nil, render_error("file_stat_failed", tostring(metadata or "file metadata is unavailable"), { file = full_path })
+    end
+    if type(metadata.size) ~= "number" then
+        return "size unavailable", nil
+    end
+    return format_file_size(metadata.size), nil
 end
 
 -- Read one directory entry list with stable sorting.
@@ -481,7 +554,23 @@ end
 
 -- Recursively collect matching files while respecting ignore rules and limits.
 -- 递归收集匹配文件，并遵守忽略规则与数量上限。
-local function collect_files(root_path, directory_path, request, state, active_ignore_rules)
+--
+-- Parameters:
+--     directory_path: Absolute directory currently being scanned.
+--     request: Validated pattern, display root, and scan options.
+--     state: Accumulated groups, counters, and ignore cache.
+--     active_ignore_rules: Ignore rules inherited from parent directories.
+-- 参数：
+--     directory_path：当前扫描的绝对目录。
+--     request：已校验的匹配模式、展示根目录及扫描选项。
+--     state：累计的分组、计数器和忽略缓存。
+--     active_ignore_rules：从父目录继承的忽略规则。
+--
+-- Returns:
+--     string|nil: Markdown error text on failure, otherwise nil.
+-- 返回值：
+--     string|nil：失败时返回 Markdown 错误文本，否则返回 nil。
+local function collect_files(directory_path, request, state, active_ignore_rules)
     if state.truncated then
         return nil
     end
@@ -521,7 +610,7 @@ local function collect_files(root_path, directory_path, request, state, active_i
             state.ignored_entries = state.ignored_entries + 1
         elseif is_directory then
             if request.recursive then
-                local child_error = collect_files(root_path, full_path, request, state, current_ignore_rules)
+                local child_error = collect_files(full_path, request, state, current_ignore_rules)
                 if child_error then
                     return child_error
                 end
@@ -530,7 +619,13 @@ local function collect_files(root_path, directory_path, request, state, active_i
                 end
             end
         elseif matches_pattern(entry_name, request.compiled_pattern) then
-            add_grouped_file(state.groups, root_path, full_path)
+            -- Stat only matched files so ignored entries do not add metadata work.
+            -- 只查询匹配文件的元数据，避免为已忽略条目增加开销。
+            local size_text, size_error = read_file_size(full_path)
+            if size_error then
+                return size_error
+            end
+            add_grouped_file(state.groups, request.display_root, full_path, size_text)
             state.matched_files = state.matched_files + 1
             if state.matched_files >= request.limit then
                 state.truncated = true
@@ -542,37 +637,52 @@ local function collect_files(root_path, directory_path, request, state, active_i
     return nil
 end
 
--- Render one compact directory group with wrapped file names.
--- 渲染一个带自动换行的紧凑目录分组。
+-- Render one directory marker and explicit relative file paths with sizes.
+-- 渲染目录标记，以及带尺寸的明确相对文件路径。
+--
+-- Parameters:
+--     dir: Display directory relative to the selected output root.
+--     files: Matched file records in that directory.
+-- 参数：
+--     dir：相对于选定输出根目录的展示目录。
+--     files：该目录中的匹配文件记录。
+--
+-- Returns:
+--     table: Ordered directory and file display lines.
+-- 返回值：
+--     table：有序的目录及文件展示行。
 local function render_group(dir, files)
-    table.sort(files)
-    local output = {}
-    local prefix = dir == "." and "./" or (dir .. "/")
-    local current = prefix
-
-    for _, file_name in ipairs(files) do
-        local token = tostring(file_name)
-        if #current + #token + 1 > MAX_LINE_WIDTH and current ~= prefix then
-            table.insert(output, current)
-            current = "  " .. token
-        else
-            if current == prefix then
-                current = current .. " " .. token
-            else
-                current = current .. " " .. token
-            end
-        end
-    end
-
-    if current ~= "" then
-        table.insert(output, current)
+    -- Compare each record by file name to preserve the existing group ordering.
+    -- 按文件名比较记录，保留原有分组内排序方式。
+    -- Parameters: left and right are file records; returns true for ascending order.
+    -- 参数：left 和 right 是文件记录；升序排列时返回 true。
+    table.sort(files, function(left, right)
+        return left.name < right.name
+    end)
+    -- The directory marker anchors the full relative path on each file line.
+    -- 目录标记与每条文件行上的完整相对路径相互对应。
+    local output = { "[D] " .. (dir == "." and "./" or (dir .. "/")) }
+    for _, file in ipairs(files) do
+        table.insert(output, "[F] " .. file.path .. " (" .. file.size .. ")")
     end
     return output
 end
 
--- Render the final compact file map.
--- 渲染最终紧凑文件地图。
-local function render_file_map(root_path, request, state)
+-- Render the final marked file map with paths relative to the selected output root.
+-- 渲染最终带类型标记、且相对于选定输出根目录的文件地图。
+--
+-- Parameters:
+--     request: Validated request containing the display path and scan options.
+--     state: Completed file groups and scan counters.
+-- 参数：
+--     request：包含展示路径和扫描选项的已校验请求。
+--     state：已完成的文件分组与扫描计数器。
+--
+-- Returns:
+--     string: Rendered file map or empty-result message.
+-- 返回值：
+--     string：渲染后的文件地图或空结果消息。
+local function render_file_map(request, state)
     local dirs = {}
     for dir, _ in pairs(state.groups) do
         table.insert(dirs, dir)
@@ -582,7 +692,7 @@ local function render_file_map(root_path, request, state)
     local lines = {
         string.format(
             "[FileList:%s Pattern:%s Recursive:%s Ignore:%s Files:%d Truncated:%s Ignored:%d]",
-            root_path,
+            request.display_path,
             request.pattern,
             tostring(request.recursive),
             tostring(not request.noignore),
@@ -705,6 +815,9 @@ local function parse_request(helpers, args)
 
     local root_path = nil
     local raw_root_value = input.path ~= nil and input.path or input.file
+    -- Relative queries use PWD as the output base so returned paths remain reusable.
+    -- 相对查询以 PWD 为输出基准，使返回的路径可以直接复用。
+    local relative_query = raw_root_value == nil and pwd_root ~= nil
     if raw_root_value == nil then
         if pwd_root == nil then
             return nil, render_error("relative_path_requires_pwd", "path must be absolute when PWD is omitted, empty, or not a directory", {
@@ -713,12 +826,26 @@ local function parse_request(helpers, args)
         end
         root_path = pwd_root
     else
+        -- Expansion must precede relative-path classification because an environment value can be absolute.
+        -- 环境变量可能展开为绝对路径，因此必须先展开再判断查询路径类型。
+        local expanded_root_value, expansion_error = helpers.expand_environment_text(
+            ERROR_TITLE, PARAMETER_ERROR_CODES, raw_root_value, "path"
+        )
+        if expansion_error then
+            return nil, expansion_error
+        end
+        relative_query = pwd_root ~= nil and not helpers.is_absolute_path(expanded_root_value)
         local path_error = nil
         root_path, path_error = validate_root_path(helpers, raw_root_value, pwd_root)
         if path_error then
             return nil, path_error
         end
     end
+
+    -- Keep absolute queries rooted at their scan directory, as before.
+    -- 绝对路径查询仍按原有方式以扫描目录作为输出基准。
+    local display_root = relative_query and pwd_root or root_path
+    local display_path = relative_query and relative_path(pwd_root, root_path) or root_path
 
     local pattern = type(input.pattern) == "string" and trim(input.pattern) or "*"
     if pattern == "" then
@@ -731,6 +858,8 @@ local function parse_request(helpers, args)
 
     return {
         root_path = root_path,
+        display_root = display_root,
+        display_path = display_path,
         pattern = pattern,
         compiled_pattern = glob_to_pattern(pattern),
         recursive = input.recursive ~= false,
@@ -762,10 +891,10 @@ return function(args)
         truncated = false,
     }
 
-    local collect_error = collect_files(request.root_path, request.root_path, request, state, {})
+    local collect_error = collect_files(request.root_path, request, state, {})
     if collect_error then
         return collect_error
     end
 
-    return return_list_success(render_file_map(request.root_path, request, state))
+    return return_list_success(render_file_map(request, state))
 end
