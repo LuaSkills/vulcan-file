@@ -13,7 +13,8 @@ dependencies/
 state/
 databases/
 temp/
-skills/
+/skills/*
+!/skills/file-workflow/
 bin/tools/*
 !bin/tools/.gitkeep
 lua_packages/*

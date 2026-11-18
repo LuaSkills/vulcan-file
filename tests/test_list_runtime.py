@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -31,7 +32,10 @@ class ListRuntimeTests(unittest.TestCase):
         # 确定技能包和随附调试运行时的位置。
         cls.root = Path(__file__).resolve().parent.parent
         cls.debug_root = cls.root.parent / "luaskills-debug"
-        cls.executable = cls.debug_root / "bin" / "luaskills-debug.exe"
+        # Use a locally built debugger for an unreleased manifest contract.
+        # 使用本地构建的调试器验证尚未发布的清单契约。
+        debugger = os.environ.get("VULCAN_FILE_DEBUGGER")
+        cls.executable = Path(debugger).resolve(strict=True) if debugger else cls.debug_root / "bin" / "luaskills-debug.exe"
         if not cls.executable.is_file():
             raise unittest.SkipTest("bundled luaskills-debug.exe is not available")
 

@@ -1,4 +1,4 @@
-# `vulcan-file-delete`
+# `vulcan_file_delete`
 
 Use this tool when you want to remove or preview one regular file or a small batch of regular files, and the host should receive explicit delete metadata when supported.
 
@@ -16,7 +16,7 @@ Not a good fit:
 
 - Directory removal is not supported.
 - Recursive cleanup is not supported.
-- If you are still searching for candidate files, use `vulcan-file-list` first.
+- If you are still searching for candidate files, use `vulcan_file_list` first.
 
 Parameter choices:
 

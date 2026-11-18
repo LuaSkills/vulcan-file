@@ -78,7 +78,7 @@ def validate_layout(root: Path) -> None:
     required_dirs = [
         root / "runtime",
         root / "schemas",
-        root / "help",
+        root / "skills",
         root / "overflow_templates",
         root / "resources",
         root / "licenses",
@@ -121,20 +121,20 @@ def validate_manifest(root: Path) -> None:
         )
         load_json(root / input_schema_file)
 
-    help_block = manifest.get("help", {})
-    main_help = help_block.get("main")
-    require(isinstance(main_help, dict), "skill.yaml must declare help.main")
-    main_help_file = main_help.get("file")
-    require(isinstance(main_help_file, str) and main_help_file, "help.main.file must be a non-empty string")
-    require((root / main_help_file).is_file(), f"Main help file is missing: {main_help_file}")
-
-    for topic in help_block.get("topics", []) or []:
-        require(isinstance(topic, dict), "Each help topic must be one YAML object")
-        topic_name = topic.get("name")
-        topic_file = topic.get("file")
-        require(isinstance(topic_name, str) and topic_name, "Each help topic requires a non-empty name")
-        require(isinstance(topic_file, str) and topic_file, f"Help topic '{topic_name}' requires one file path")
-        require((root / topic_file).is_file(), f"Help topic '{topic_name}' points to a missing file: {topic_file}")
+    # Check that the declared guide and its default introduction are shipped with the package.
+    # 校验声明的指南及默认语言介绍随包交付。
+    registration = manifest.get("registration")
+    require(isinstance(registration, dict), "skill.yaml must declare registration")
+    require(registration.get("mode") == "explicit", "The package must register its tools explicitly")
+    default_locale = registration.get("default_locale")
+    require(default_locale in registration.get("locales", {}), "Missing default package introduction")
+    guides = registration.get("prompt_skills")
+    require(isinstance(guides, list) and len(guides) == 1, "Declare one bundled prompt skill")
+    guide = guides[0]
+    guide_file = f"skills/{guide['name']}/SKILL.md"
+    require(guide.get("file") == guide_file, "The guide path must match its registered name")
+    require(default_locale in guide.get("locales", {}), "Missing default guide introduction")
+    require((root / guide_file).is_file(), f"Missing bundled guide: {guide_file}")
 
 
 """

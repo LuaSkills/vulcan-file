@@ -1,54 +1,55 @@
 name: vulcan-file
-version: 0.1.14
+version: 0.1.15
 debug: false
-help:
-  main:
-    description: Help agents decide when to use vulcan-file instead of CodeKit, rg, or shell snippets.
-    file: help/help.md
-  topics:
-    - name: create
-      description: Create one or more brand-new files, with no_apply=true available for preview-only behavior.
-      file: help/create.md
-    - name: read
-      description: Read one or more raw text snippets, or batch multiple known file reads in one call.
-      file: help/read.md
-    - name: list
-      description: Find candidate files cheaply before reading them.
-      file: help/list.md
-    - name: edit
-      description: Make one or more small text edits after target lines have been inspected, with no_apply=true available for preview-only behavior.
-      file: help/edit.md
-    - name: delete
-      description: Preview and delete one or more regular files without supporting directory removal.
-      file: help/delete.md
+registration:
+  mode: explicit
+  default_locale: en-US
+  locales:
+    en-US:
+      title: "Vulcan File"
+      description: "List, read, create, edit, and delete regular files, with batch and preview options where supported."
+    zh-CN:
+      title: "Vulcan File"
+      description: "列出、读取、创建、编辑和删除普通文件，部分操作支持批量和预览。"
+    zh-TW:
+      title: "Vulcan File"
+      description: "列出、讀取、建立、編輯和刪除一般檔案，部分操作支援批次和預覽。"
+  prompt_skills:
+    - name: file-workflow
+      file: skills/file-workflow/SKILL.md
+      locales:
+        en-US:
+          title: "File operations workflow"
+          description: "Use for raw text reads, small edits, and previewing file changes before writing or deleting."
+        zh-CN:
+          title: "文件操作指南"
+          description: "介绍如何读取原文、做小范围编辑，以及在写入或删除前预览变更。"
+        zh-TW:
+          title: "檔案操作指南"
+          description: "說明如何讀取原文、小範圍編輯，以及在寫入或刪除前預覽變更。"
 entries:
   - name: create
     description: "[AI FILE CREATE] Use when you want to create one brand-new file or up to 10 brand-new files. It writes by default, supports no_apply=true for preview-only behavior, errors when a target file already exists, and returns a host change_set when supported."
     lua_entry: runtime/vulcan-file-create.lua
     lua_module: vulcan_file_create
-    help: create
     input_schema_file: schemas/create.input.schema.json
   - name: read
     description: "[AI FILE READ] Use when you already know the target file and line area and need exact source text. It supports single-file reads or up to 10 batch file reads. Prefer segments as an array of {start, count} objects; keep lines_rule only for legacy clients that cannot send arrays. Do not use this to search; use codekit-rg first."
     lua_entry: runtime/vulcan-file-read.lua
     lua_module: vulcan_file_read
-    help: read
     input_schema_file: schemas/read.input.schema.json
   - name: list
     description: "[AI FILE LIST] Find candidate files with ignore-aware directory groups. [D] marks directories and [F] marks files with B/KB/MB/GB sizes. With a valid PWD and a relative path query, results are relative to PWD. Use codekit tools instead when you need AST structure."
     lua_entry: runtime/vulcan-file-list.lua
     lua_module: vulcan_file_list
-    help: list
     input_schema_file: schemas/list.input.schema.json
   - name: edit
     description: "[AI FILE EDIT] Use after reading one existing file. Submit one file plus an ordered nodes array of edit/append nodes with original line ranges and complete old_content guards. Multiple edit nodes are supported in one file; line_tolerance defaults to 0 and can be supplied to accept a unique old_content match within an expanded stale-line window; overlapping ranges reject the request, node content failures commit only the successful prefix, and no_apply=true previews without writing."
     lua_entry: runtime/vulcan-file-edit.lua
     lua_module: vulcan_file_edit
-    help: edit
     input_schema_file: schemas/edit.input.schema.json
   - name: delete
     description: "[AI FILE DELETE] Use to delete or preview one regular file or up to 10 regular files. It rejects directories explicitly, deletes by default, recommends no_apply=true previews before deletion, and returns a host change_set when supported."
     lua_entry: runtime/vulcan-file-delete.lua
     lua_module: vulcan_file_delete
-    help: delete
     input_schema_file: schemas/delete.input.schema.json

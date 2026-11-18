@@ -1,4 +1,4 @@
-# `vulcan-file-list`
+# `vulcan_file_list`
 
 Use this tool when you do not know where the target file is yet, or when you need to narrow the candidate file set first.
 
@@ -10,9 +10,9 @@ Good fits:
 
 Not a good fit:
 
-- Use `vulcan-codekit-rg` when you need to search file contents.
+- Use `vulcan_codekit_rg` when you need to search file contents.
 - Use `vulcan-codekit` when you need functions, classes, Markdown headings, or other structure.
-- Use `vulcan-file-read` directly when the exact file and line area are already known.
+- Use `vulcan_file_read` directly when the exact file and line area are already known.
 
 Parameter choices:
 

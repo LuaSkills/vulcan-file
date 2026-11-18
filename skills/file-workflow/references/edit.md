@@ -1,6 +1,6 @@
-# `vulcan-file-edit`
+# `vulcan_file_edit`
 
-Use this tool when one existing file has one or more confirmed text changes. Read the target file first with `vulcan-file-read` and copy the complete original text for every edit node.
+Use this tool when one existing file has one or more confirmed text changes. Read the target file first with `vulcan_file_read` and copy the complete original text for every edit node.
 
 The request edits exactly one file. Multiple positions in that file belong in one `nodes` array so the runtime can preserve the original line coordinates and calculate later offsets.
 
@@ -32,7 +32,7 @@ The request edits exactly one file. Multiple positions in that file belong in on
 
 `PWD` remains the optional project root for relative file paths. `no_apply=true` runs the full preview and validation flow without writing. It applies to the whole request.
 
-`line_tolerance` is an optional non-negative number of logical lines used when the supplied line numbers may be stale. It defaults to `0`, which requires the unique `old_content` block to match the declared `start_line`/`end_line` exactly. When it is greater than `0`, the runtime expands that range upward and downward by the given number of lines and accepts the edit only when the complete, globally unique `old_content` match fits inside the expanded range. For example, `line_tolerance=50` permits a match within 50 lines above or below the declared range.
+`line_tolerance` is an optional non-negative number of logical lines used when the supplied line numbers may be stale. The default `0` uses strict range matching: the unique `old_content` block must match the declared `start_line`/`end_line` exactly. When it is greater than `0`, the runtime expands that range upward and downward by the given number of lines and accepts the edit only when the complete, globally unique `old_content` match fits inside the expanded range. For example, `line_tolerance=50` permits a match within 50 lines above or below the declared range.
 
 ## Node rules
 
@@ -75,4 +75,4 @@ Final JSON validation failures keep a single-line decoder detail; nested Markdow
 
 The optional host `change_set` result is preserved. It contains one file record with one hunk per applied or previewed node, and hunk line numbers refer to the final staged or committed content. For a tolerant edit, the hunk keeps the declared `original_range` and also reports the actual `matched_original_range` plus `match_mode`.
 
-Use `vulcan-codekit-patch` for whole-function or whole-method replacement when structural source understanding is required.
+Use `vulcan_codekit_patch` for whole-function or whole-method replacement when structural source understanding is required.

@@ -1,5 +1,7 @@
 # Vulcan File
 
+Vulcan Code 内可加载[随包提示词 Skill](skills/file-workflow/SKILL.md)，查看如何选择工具和发起调用。
+
 `Vulcan File` 的核心定位不是“再包一层文件系统 API”，而是给 Agent 提供一套稳定、低噪声、可继续执行的原文文件操作协议。
 
 **CodeKit 帮 Agent 理解代码结构，File 帮 Agent 安全处理原文文件。**
@@ -14,11 +16,11 @@
 
 当前 LuaSkills 新命名采用 `skill_id-entry_name` 的 canonical 形式，因此推荐直接使用：
 
-- `vulcan-file-list`
-- `vulcan-file-read`
-- `vulcan-file-create`
-- `vulcan-file-edit`
-- `vulcan-file-delete`
+- `vulcan_file_list`
+- `vulcan_file_read`
+- `vulcan_file_create`
+- `vulcan_file_edit`
+- `vulcan_file_delete`
 
 在部分 MCP 客户端或宿主绑定里，工具名可能会被转写成下划线形式，例如 `vulcan_file_read`。这只是暴露层命名差异，语义上仍对应同一组 File 入口。
 
@@ -86,7 +88,7 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 
 ## 核心能力
 
-### `vulcan-file-list`
+### `vulcan_file_list`
 
 在还不知道目标文件在哪里时，先看一个低 token 的文件名地图。
 
@@ -114,7 +116,7 @@ Agent 场景里真正缺的不是更多原始能力，而是更稳定的操作�
 
 ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定场景不保证与 Git 完全一致。
 
-### `vulcan-file-read`
+### `vulcan_file_read`
 
 当文件路径和大致行号已经明确后，用它读取精确原文。
 
@@ -165,7 +167,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - 是否因为超过文件尾部而截断
 - 多文件批量读取时的分隔区块
 
-默认会保留 `L12:` 这类稳定行号前缀，便于后续 review、引用或调用 `vulcan-file-edit`。如果只需要无行号前缀的正文行，可以把 `numbered` 设为 `false`；文件头和多段分隔线仍会保留。
+默认会保留 `L12:` 这类稳定行号前缀，便于后续 review、引用或调用 `vulcan_file_edit`。如果只需要无行号前缀的正文行，可以把 `numbered` 设为 `false`；文件头和多段分隔线仍会保留。
 
 边界行为也很明确：
 
@@ -177,12 +179,12 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - `lines_rule` 中出现字面字符串 `"newline"` 会返回 `invalid_lines_rule`，需要改为 JSON 字符串中的 `\n`
 - 同时传 `segments` 与 `lines_rule` 会返回 `conflicting_range_arguments`
 - 同时传根级单文件参数和 `files` 会返回 `conflicting_batch_arguments`
-- 目录路径只用于快速查看直接子项名称，递归找文件应使用 `vulcan-file-list`
+- 目录路径只用于快速查看直接子项名称，递归找文件应使用 `vulcan_file_list`
 - 路径值可以包含 `${env:NAME}` 占位符，工具会在访问文件系统前用 Lua `os.getenv` 展开
 
 它不是“翻页猜文件”的工具。还不知道文本在哪里时，应先搜索或列候选文件。
 
-### `vulcan-file-create`
+### `vulcan_file_create`
 
 当你需要创建一个原本不存在的文件，或者一小批全新文件，并且可能需要仅预览模式时，使用这个工具。
 
@@ -209,7 +211,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 - 结果会以仅包含新增行的 diff 形式展示，最多展示 80 行
 - 批量模式最多接受 10 个条目，且整批共用一个 `no_apply` 标记
 
-### `vulcan-file-edit`
+### `vulcan_file_edit`
 
 当目标文件和目标行已经确认后，用它做小范围文本编辑。
 
@@ -246,7 +248,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 它刻意不做复杂结构判断。如果目标是完整函数或方法替换，应使用 `vulcan-codekit-patch`；如果需要先理解源码结构，应先使用 CodeKit。
 
-### `vulcan-file-delete`
+### `vulcan_file_delete`
 
 当你需要删除或预览一个普通文件，或者一小批普通文件，并且希望宿主在支持时收到 canonical 删除元数据时，使用这个工具。
 
@@ -334,10 +336,10 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 ## 当前包含的工具
 
-- `vulcan-file-list`
-- `vulcan-file-read`
-- `vulcan-file-create`
-- `vulcan-file-edit`
+- `vulcan_file_list`
+- `vulcan_file_read`
+- `vulcan_file_create`
+- `vulcan_file_edit`
 
 ## 独立仓库说明
 
@@ -345,7 +347,7 @@ ignore 处理不是完整 Git ignore 引擎；复杂转义和部分高级否定�
 
 - `runtime/`：LuaSkill 工具入口
 - `schemas/`：面向 AI 的输入 schema 文件
-- `help/`：严格帮助流与各工具说明
+- `skills/`：随包提示词 Skill 与各工具参考资料
 - `overflow_templates/`：预留的本地超限模板目录
 - `resources/`：预留资源目录
 - `licenses/`：第三方声明
@@ -390,7 +392,7 @@ python .\scripts\package_skill.py --emit-source-yaml
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.14
+.\scripts\tag_release.ps1 0.1.15
 ```
 
 Unix-like shell：
@@ -398,7 +400,7 @@ Unix-like shell：
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.14
+./scripts/tag_release.sh 0.1.15
 ```
 
 ## 一句话总结

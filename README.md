@@ -1,5 +1,7 @@
 # Vulcan File
 
+See the [bundled prompt skill](skills/file-workflow/SKILL.md) for tool selection and call examples.
+
 Simplified Chinese: [README.zh-CN.md](README.zh-CN.md)
 
 `Vulcan File` is not "just another filesystem API wrapper." Its core purpose is to give agents a stable, low-noise, execution-friendly protocol for working with raw text files.
@@ -16,11 +18,11 @@ It is not solving the basic question of whether files can be read. It solves the
 
 The current LuaSkills naming model uses the canonical `skill_id-entry_name` form, so the recommended tool names are:
 
-- `vulcan-file-list`
-- `vulcan-file-read`
-- `vulcan-file-create`
-- `vulcan-file-edit`
-- `vulcan-file-delete`
+- `vulcan_file_list`
+- `vulcan_file_read`
+- `vulcan_file_create`
+- `vulcan_file_edit`
+- `vulcan_file_delete`
 
 Some MCP clients or host bindings may expose the same tools with underscores, such as `vulcan_file_read`. That is only a naming difference at the exposure layer; the semantics still map to the same File entries.
 
@@ -88,7 +90,7 @@ In short:
 
 ## Core Capabilities
 
-### `vulcan-file-list`
+### `vulcan_file_list`
 
 Use this when the target file is not known yet and you need a low-token file map first.
 
@@ -116,7 +118,7 @@ This is not a content search tool. If you have a log line, error string, functio
 
 Ignore handling is not a full Git ignore engine; complex escapes and some advanced negation cases are not guaranteed to match Git exactly.
 
-### `vulcan-file-read`
+### `vulcan_file_read`
 
 Use this after the file path and approximate line area are already known.
 
@@ -167,7 +169,7 @@ The result includes:
 - Whether the request was clipped at EOF
 - Batch separators when multiple file requests are executed in one call
 
-By default, it keeps stable prefixes such as `L12:` so later review comments, citations, or `vulcan-file-edit` calls can refer to exact lines. Set `numbered=false` when plain raw text lines are more useful; the metadata header and multi-segment separators still remain.
+By default, it keeps stable prefixes such as `L12:` so later review comments, citations, or `vulcan_file_edit` calls can refer to exact lines. Set `numbered=false` when plain raw text lines are more useful; the metadata header and multi-segment separators still remain.
 
 Boundary behavior is explicit:
 
@@ -179,12 +181,12 @@ Boundary behavior is explicit:
 - A literal `"newline"` token in `lines_rule` returns `invalid_lines_rule`; use `\n` in the JSON string instead.
 - Sending both `segments` and `lines_rule` returns `conflicting_range_arguments`.
 - Sending both root-level single-file arguments and `files` returns `conflicting_batch_arguments`.
-- Directory paths are only for a quick direct-child name listing; recursive discovery belongs in `vulcan-file-list`.
+- Directory paths are only for a quick direct-child name listing; recursive discovery belongs in `vulcan_file_list`.
 - Path values may include `${env:NAME}` placeholders, which are expanded with Lua `os.getenv` before filesystem access.
 
 This is not a tool for guessing through pages. If the text location is unknown, search or list candidates first.
 
-### `vulcan-file-create`
+### `vulcan_file_create`
 
 Use this when you need to create one brand-new file or a small batch of brand-new files, with an optional preview-only mode.
 
@@ -211,7 +213,7 @@ Boundary behavior is explicit:
 - Result output shows the creation as a plus-only diff block and is truncated after 80 preview lines.
 - Batch mode accepts at most 10 items, and one `no_apply` flag controls the whole batch.
 
-### `vulcan-file-edit`
+### `vulcan_file_edit`
 
 Use this for small text edits after the target file and target lines have been confirmed.
 
@@ -248,7 +250,7 @@ The result includes:
 
 It deliberately avoids complex structural reasoning. Use `vulcan-codekit-patch` for whole-function or whole-method replacement. Use CodeKit first when source structure must be understood before editing.
 
-### `vulcan-file-delete`
+### `vulcan_file_delete`
 
 Use this when you need to remove or preview one regular file or a small batch of regular files, and the host should receive canonical delete metadata when supported.
 
@@ -336,10 +338,10 @@ This is not shell functionality with a different name. It is a small protocol th
 
 ## Included Tools
 
-- `vulcan-file-list`
-- `vulcan-file-read`
-- `vulcan-file-create`
-- `vulcan-file-edit`
+- `vulcan_file_list`
+- `vulcan_file_read`
+- `vulcan_file_create`
+- `vulcan_file_edit`
 
 ## Repository Notes
 
@@ -347,7 +349,7 @@ This repository is the standalone source repository for the `vulcan-file` LuaSki
 
 - `runtime/`: LuaSkill tool entries
 - `schemas/`: AI-facing input schema files
-- `help/`: strict help flows and per-tool guidance
+- `skills/`: bundled prompt skill and per-tool references
 - `overflow_templates/`: reserved local overflow-template directory
 - `resources/`: reserved resource directory
 - `licenses/`: third-party notices
@@ -392,7 +394,7 @@ Recommended local release steps:
 ```powershell
 python .\scripts\validate_skill.py
 python .\scripts\package_skill.py
-.\scripts\tag_release.ps1 0.1.14
+.\scripts\tag_release.ps1 0.1.15
 ```
 
 Unix-like shell:
@@ -400,7 +402,7 @@ Unix-like shell:
 ```bash
 python ./scripts/validate_skill.py
 python ./scripts/package_skill.py
-./scripts/tag_release.sh 0.1.14
+./scripts/tag_release.sh 0.1.15
 ```
 
 ## One-Sentence Summary

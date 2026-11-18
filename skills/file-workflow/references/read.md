@@ -1,10 +1,10 @@
-# `vulcan-file-read`
+# `vulcan_file_read`
 
 Use this tool when you already know the target file path and approximate lines and need exact raw text.
 
 Good fits:
 
-- You already found one candidate file with `vulcan-file-list` or `vulcan-codekit-rg`.
+- You already found one candidate file with `vulcan_file_list` or `vulcan_codekit_rg`.
 - You need the exact text near one known line range.
 - You want to read multiple non-adjacent snippets in one call for comparison.
 - You want to batch up to 10 known file reads in one call.
@@ -12,9 +12,9 @@ Good fits:
 
 Not a good fit:
 
-- Do not guess through pages when you do not know where the text is; search with `vulcan-codekit-rg` first.
+- Do not guess through pages when you do not know where the text is; search with `vulcan_codekit_rg` first.
 - Prefer `vulcan-codekit` when you need source structure, function boundaries, or class information.
-- Use `vulcan-file-list` when you need recursive file discovery.
+- Use `vulcan_file_list` when you need recursive file discovery.
 
 Parameter choices:
 

@@ -1,4 +1,4 @@
-# `vulcan-file-create`
+# `vulcan_file_create`
 
 Use this tool when you want to create one file that does not exist yet, or a small batch of brand-new files, with an optional preview-only mode.
 
@@ -13,9 +13,9 @@ Good fits:
 
 Not a good fit:
 
-- The target file already exists; use `vulcan-file-edit` instead.
-- You only need to append or replace a small amount of text in one existing file; use `vulcan-file-edit` instead.
-- You do not know where the file should be created yet; use `vulcan-file-list` or another search tool first.
+- The target file already exists; use `vulcan_file_edit` instead.
+- You only need to append or replace a small amount of text in one existing file; use `vulcan_file_edit` instead.
+- You do not know where the file should be created yet; use `vulcan_file_list` or another search tool first.
 
 Parameter choices:
 

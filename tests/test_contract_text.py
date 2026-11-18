@@ -114,7 +114,7 @@ Returns:
 """
 def test_skill_manifest_contract() -> None:
     skill_yaml = read_text("skill.yaml")
-    assert_contains(skill_yaml, "version: 0.1.14")
+    assert_contains(skill_yaml, "version: 0.1.15")
     assert_contains(skill_yaml, "input_schema_file: schemas/create.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/read.input.schema.json")
     assert_contains(skill_yaml, "input_schema_file: schemas/list.input.schema.json")
@@ -250,8 +250,8 @@ def test_runtime_guardrails() -> None:
 
 
 """
-Validate user-facing README and help guidance.
-校验面向用户的 README 与 help 指引。
+Validate user-facing README and prompt skill guidance.
+校验面向用户的 README 与提示词 Skill 指引。
 
 Returns:
     None: Raises AssertionError on missing guidance.
@@ -263,11 +263,11 @@ def test_documentation_guidance() -> None:
         [
             read_text("README.md"),
             read_text("README.zh-CN.md"),
-            read_text("help/create.md"),
-            read_text("help/read.md"),
-            read_text("help/list.md"),
-            read_text("help/edit.md"),
-            read_text("help/delete.md"),
+            read_text("skills/file-workflow/references/create.md"),
+            read_text("skills/file-workflow/references/read.md"),
+            read_text("skills/file-workflow/references/list.md"),
+            read_text("skills/file-workflow/references/edit.md"),
+            read_text("skills/file-workflow/references/delete.md"),
         ]
     )
 
@@ -282,8 +282,8 @@ def test_documentation_guidance() -> None:
     assert_contains(docs, "src/*.lua")
     assert_contains(docs, "not a full Git ignore engine")
     assert_contains(docs, "默认 200 行")
-    assert_contains(docs, "vulcan-file-create")
-    assert_contains(docs, "vulcan-file-delete")
+    assert_contains(docs, "vulcan_file_create")
+    assert_contains(docs, "vulcan_file_delete")
     assert_contains(docs, "file_already_exists")
     assert_contains(docs, "parent_directory_not_found")
     assert_contains(docs, "old_content")
@@ -314,24 +314,24 @@ def test_documentation_guidance() -> None:
 
 
 """
-Validate that all help markdown files stay English-only.
-校验所有 help Markdown 文件保持纯英文。
+Validate that all prompt skill Markdown files stay English-only.
+校验所有提示词 Skill Markdown 文件保持纯英文。
 
 Returns:
-    None: Raises AssertionError when any help file contains CJK text.
+    None: Raises AssertionError when any guide file contains CJK text.
 返回值：
-    None：任一 help 文件包含中日韩统一表意文字时抛出 AssertionError。
+    None：任一指南文件包含中日韩统一表意文字时抛出 AssertionError。
 """
-def test_help_markdown_is_english_only() -> None:
-    help_files = [
-        "help/help.md",
-        "help/create.md",
-        "help/read.md",
-        "help/list.md",
-        "help/edit.md",
-        "help/delete.md",
+def test_prompt_skill_markdown_is_english_only() -> None:
+    guide_files = [
+        "skills/file-workflow/SKILL.md",
+        "skills/file-workflow/references/create.md",
+        "skills/file-workflow/references/read.md",
+        "skills/file-workflow/references/list.md",
+        "skills/file-workflow/references/edit.md",
+        "skills/file-workflow/references/delete.md",
     ]
-    for relative_path in help_files:
+    for relative_path in guide_files:
         assert_no_cjk(read_text(relative_path), relative_path)
 
 
@@ -348,7 +348,7 @@ def main() -> None:
     test_skill_manifest_contract()
     test_runtime_guardrails()
     test_documentation_guidance()
-    test_help_markdown_is_english_only()
+    test_prompt_skill_markdown_is_english_only()
 
 
 if __name__ == "__main__":
